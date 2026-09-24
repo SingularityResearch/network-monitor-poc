@@ -52,6 +52,7 @@ class RealNetworkCollector:
     def __init__(self, history_window_sec: int = 90):
         self.history_window_sec = history_window_sec
         self.dns_cache = {}
+        self.dns_executor = ThreadPoolExecutor(max_workers=16)
         self.lock = threading.Lock()
         
         # Recent connections ring buffer: key -> {conn_data, last_seen}
@@ -182,25 +183,26 @@ class RealNetworkCollector:
 
         return arp_hosts
 
-    def resolve_ip(self, ip_str: str, routes: dict) -> dict:
-        """Resolve IP classification, provider, hostname, and zone."""
-        clean_ip = ip_str.split('%')[0]
-        
-        if clean_ip in self.dns_cache:
-            return self.dns_cache[clean_ip]
-
-        # Determine IP type
-        is_loopback = False
-        is_private = False
-        is_multicast = False
-
+    def lookup_dns(self, ip_str: str):
+        """Perform genuine DNS PTR reverse lookup and cache result."""
+        with self.lock:
+            if ip_str in self.dns_cache:
+                return self.dns_cache[ip_str]
         try:
-            ip_obj = ipaddress.ip_address(clean_ip)
-            is_loopback = ip_obj.is_loopback
-            is_private = ip_obj.is_private
-            is_multicast = ip_obj.is_multicast
-        except ValueError:
-            pass
+            name = socket.gethostbyaddr(ip_str)[0]
+            ptr = name.rstrip('.') if name else None
+        except Exception:
+            ptr = None
+        with self.lock:
+            self.dns_cache[ip_str] = ptr
+        return ptr
+
+    def resolve_ip(self, ip_str: str, routes: dict, resolve_dns: bool = False) -> dict:
+        """
+        Resolve IP classification, subnet prefix, and optional DNS PTR hostname.
+        If resolve_dns is False, no DNS queries are performed.
+        """
+        clean_ip = ip_str.split('%')[0].strip()
 
         # 1. Standard IP classification using Python ipaddress module
         try:
@@ -227,69 +229,92 @@ class RealNetworkCollector:
 
         is_internal = is_loopback or is_private or is_link_local
         
-        # 3. Categorize zone and subnet without guessing
+        # 3. Categorize zone and subnet
         if is_loopback:
             hostname = 'localhost'
             zone = 'Loopback IPC'
             org = 'Local Machine'
             subnet_category = 1
             prefix = '127.0.0.0/8' if (ip_obj and ip_obj.version == 4) else '::1/128'
+            dns_name = 'localhost' if resolve_dns else None
+            dns_status = 'resolved' if resolve_dns else 'disabled'
         elif clean_ip == routes.get('default_gw'):
-            hostname = 'Default Gateway'
             zone = 'Internal LAN'
             org = 'Gateway/Router'
             subnet_category = 0
             prefix = str(local_net) if local_net else 'LAN'
+            if resolve_dns:
+                dns_name = self.lookup_dns(clean_ip)
+                dns_status = 'resolved' if dns_name else 'no_ptr'
+                hostname = dns_name if dns_name else 'Default Gateway'
+            else:
+                dns_name = None
+                dns_status = 'disabled'
+                hostname = 'Default Gateway'
         elif clean_ip == routes.get('local_ip'):
             try:
-                hostname = socket.gethostname()
+                host_label = socket.gethostname()
             except Exception:
-                hostname = f"Host ({routes.get('iface', 'eth0')})"
+                host_label = f"Host ({routes.get('iface', 'eth0')})"
             zone = 'Internal LAN'
             org = 'This Host'
             subnet_category = 0
             prefix = str(local_net) if local_net else 'LAN'
+            if resolve_dns:
+                dns_name = self.lookup_dns(clean_ip) or host_label
+                dns_status = 'resolved'
+                hostname = dns_name
+            else:
+                dns_name = None
+                dns_status = 'disabled'
+                hostname = host_label
         elif is_private or (local_net and ip_obj and ip_obj in local_net):
             zone = 'Internal LAN'
             org = 'LAN Host'
             subnet_category = 0
             prefix = str(local_net) if local_net else '192.168.0.0/24'
-            try:
-                name = socket.gethostbyaddr(clean_ip)[0]
-                hostname = name.split('.')[0] if name else clean_ip
-            except Exception:
+            if resolve_dns:
+                dns_name = self.lookup_dns(clean_ip)
+                dns_status = 'resolved' if dns_name else 'no_ptr'
+                hostname = dns_name if dns_name else clean_ip
+            else:
+                dns_name = None
+                dns_status = 'disabled'
                 hostname = clean_ip
         else:
-            # Public Internet IP - genuine PTR query only (NO speculative company guessing)
             zone = 'Public Internet'
             subnet_category = 2
             prefix = str(ipaddress.ip_network(f"{clean_ip}/16", strict=False)) if (ip_obj and ip_obj.version == 4) else 'Public'
             
-            try:
-                ptr_name = socket.gethostbyaddr(clean_ip)[0]
-                if ptr_name:
-                    hostname = ptr_name.rstrip('.')
-                    parts = hostname.split('.')
-                    org = '.'.join(parts[-2:]) if len(parts) >= 2 else ptr_name
+            if resolve_dns:
+                dns_name = self.lookup_dns(clean_ip)
+                if dns_name:
+                    hostname = dns_name
+                    parts = dns_name.split('.')
+                    org = '.'.join(parts[-2:]) if len(parts) >= 2 else dns_name
+                    dns_status = 'resolved'
                 else:
                     hostname = clean_ip
                     org = 'Public Host'
-            except Exception:
-                # No PTR record found in DNS - keep exact IP, do NOT guess
+                    dns_status = 'no_ptr'
+            else:
+                dns_name = None
                 hostname = clean_ip
                 org = 'Public Host'
+                dns_status = 'disabled'
 
-        res = {
+        return {
             'ip': clean_ip,
             'hostname': hostname,
+            'dnsName': dns_name,
+            'dnsStatus': dns_status,
+            'dnsEnabled': resolve_dns,
             'zone': zone,
             'org': org,
             'is_internal': is_internal,
             'subnet_category': subnet_category,
             'prefix': prefix
         }
-        self.dns_cache[clean_ip] = res
-        return res
 
     def parse_endpoint(self, addr_str: str):
         """Parse '192.168.0.117:48356' or '[::1]:8080' into IP and port."""
@@ -362,7 +387,7 @@ class RealNetworkCollector:
 
         return sockets
 
-    def get_topology(self, scope: str = 'all', target_k: int = 4):
+    def get_topology(self, scope: str = 'all', target_k: int = 4, resolve_dns: bool = False):
         """
         Assemble the full network topology:
         - Nodes (Internal LAN, Loopback, Public Cloud, Public Web)
@@ -424,12 +449,18 @@ class RealNetworkCollector:
         # Filter nodes according to Scope ('all', 'internal', 'public')
         filtered_ips = []
         for ip in node_ip_set:
-            info = self.resolve_ip(ip, routes)
+            info = self.resolve_ip(ip, routes, resolve_dns=False)
             if scope == 'internal' and not info['is_internal']:
                 continue
             if scope == 'public' and info['is_internal'] and ip not in (routes['local_ip'], routes['default_gw']):
                 continue
             filtered_ips.append(ip)
+
+        # Parallel DNS lookup pre-warming if DNS resolution is requested
+        if resolve_dns:
+            uncached = [ip for ip in filtered_ips if ip not in self.dns_cache]
+            if uncached:
+                list(self.dns_executor.map(self.lookup_dns, uncached))
 
         # Coordinate Anchor Centers for 4 Natural Topologic Subnets:
         lan_subnet_name = f"Internal LAN ({routes.get('subnet_cidr', '192.168.0.0/24')})"
@@ -462,7 +493,7 @@ class RealNetworkCollector:
 
         # Build Node Objects
         for idx, ip in enumerate(filtered_ips):
-            info = self.resolve_ip(ip, routes)
+            info = self.resolve_ip(ip, routes, resolve_dns=resolve_dns)
             cat = info['subnet_category']
             center = ZONE_CENTERS[cat % len(ZONE_CENTERS)]
 
@@ -492,6 +523,9 @@ class RealNetworkCollector:
                 'id': idx,
                 'ip': ip,
                 'hostname': info['hostname'],
+                'dnsName': info['dnsName'],
+                'dnsStatus': info['dnsStatus'],
+                'dnsEnabled': resolve_dns,
                 'subnetIdx': cat,
                 'zone': info['zone'],
                 'org': info['org'],
@@ -612,6 +646,7 @@ class RealNetworkCollector:
             'meta': {
                 'source': 'real',
                 'scope': scope,
+                'resolveDns': resolve_dns,
                 'interface': routes['iface'],
                 'localIP': routes['local_ip'],
                 'defaultGateway': routes['default_gw'],

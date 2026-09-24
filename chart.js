@@ -28,6 +28,7 @@ export class NetworkClusterChart {
       showHalos: true,
       showVoronoi: false,
       showIpLabels: false,
+      resolveDns: false,
       filterPort: 'all', // 'all' or port number e.g. 443
       pointRadius: 5.5,
       centroidRadius: 11,
@@ -226,6 +227,32 @@ export class NetworkClusterChart {
           `).join('')
         : '<div style="color:#64748b;font-size:11px;">No outbound sockets</div>';
 
+      let dnsHtml = '';
+      if (node.dnsEnabled) {
+        if (node.dnsName) {
+          dnsHtml = `
+            <div style="display:flex;justify-content:space-between;margin-top:2px;gap:8px;">
+              <span style="color:#94a3b8;">DNS (PTR):</span>
+              <b style="color:#38bdf8;font-family:monospace;font-size:11px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${node.dnsName}">${node.dnsName}</b>
+            </div>
+          `;
+        } else {
+          dnsHtml = `
+            <div style="display:flex;justify-content:space-between;margin-top:2px;gap:8px;">
+              <span style="color:#94a3b8;">DNS (PTR):</span>
+              <span style="color:#64748b;font-size:10.5px;font-style:italic;">No PTR record found</span>
+            </div>
+          `;
+        }
+      } else {
+        dnsHtml = `
+          <div style="display:flex;justify-content:space-between;margin-top:2px;gap:8px;">
+            <span style="color:#94a3b8;">DNS Lookup:</span>
+            <span style="color:#64748b;font-size:10.5px;">Off (Enable via sidebar)</span>
+          </div>
+        `;
+      }
+
       this.tooltip.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:5px;gap:8px;">
           <div style="font-weight:700;color:${color.main};font-family:monospace;font-size:13px;">
@@ -238,6 +265,7 @@ export class NetworkClusterChart {
             <span style="color:#94a3b8;">Host / Domain:</span>
             <b style="color:#f1f5f9;font-family:monospace;font-size:11px;">${node.hostname || node.ip}</b>
           </div>
+          ${dnsHtml}
           ${processBadge}
           <div style="display:flex;justify-content:space-between;margin-top:2px;">
             <span style="color:#94a3b8;">Cluster Centroid:</span>
@@ -567,9 +595,12 @@ export class NetworkClusterChart {
         ctx.font = isHovered ? 'bold 10px JetBrains Mono, monospace' : '9px JetBrains Mono, monospace';
         ctx.fillStyle = isHovered ? '#ffffff' : 'rgba(203, 213, 225, 0.75)';
         ctx.textAlign = 'center';
-        const label = isHovered && node.hostname && node.hostname !== node.ip
-          ? `${node.hostname} (${node.ip})`
-          : node.ip;
+        let label = node.ip;
+        if (this.options.resolveDns && node.dnsName) {
+          label = isHovered ? `${node.dnsName} (${node.ip})` : node.dnsName;
+        } else if (isHovered && node.hostname && node.hostname !== node.ip) {
+          label = `${node.hostname} (${node.ip})`;
+        }
         ctx.fillText(label, pos.x, pos.y - radius - 4);
       }
     }

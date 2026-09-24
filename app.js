@@ -39,6 +39,7 @@ class NetworkClusterApp {
     this.toggleHalos = document.getElementById('toggleHalos');
     this.toggleVoronoi = document.getElementById('toggleVoronoi');
     this.toggleIpLabels = document.getElementById('toggleIpLabels');
+    this.toggleDnsLookup = document.getElementById('toggleDnsLookup');
 
     // Live Indicators
     this.liveIndicator = document.getElementById('liveIndicator');
@@ -70,6 +71,7 @@ class NetworkClusterApp {
     // State
     this.dataSource = this.dataSourceSelect ? this.dataSourceSelect.value : 'real';
     this.trafficScope = this.trafficScopeSelect ? this.trafficScopeSelect.value : 'all';
+    this.resolveDns = this.toggleDnsLookup ? this.toggleDnsLookup.checked : false;
     this.k = parseInt(this.kSlider.value, 10) || 4;
     this.nodeCount = parseInt(this.pointSlider.value, 10) || 140;
     this.intervalSeconds = parseFloat(this.intervalSelect.value) || 10;
@@ -263,6 +265,15 @@ class NetworkClusterApp {
       this.chart.render();
     });
 
+    if (this.toggleDnsLookup) {
+      this.toggleDnsLookup.addEventListener('change', (e) => {
+        this.resolveDns = e.target.checked;
+        this.chart.options.resolveDns = this.resolveDns;
+        this.elapsedSeconds = 0;
+        this.generateAndCluster();
+      });
+    }
+
     // Spacebar shortcut
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space' && e.target === document.body) {
@@ -314,7 +325,7 @@ class NetworkClusterApp {
 
   async fetchRealNetworkData() {
     try {
-      const url = `/api/network-telemetry?scope=${encodeURIComponent(this.trafficScope)}&k=${this.k}`;
+      const url = `/api/network-telemetry?scope=${encodeURIComponent(this.trafficScope)}&k=${this.k}&resolve_dns=${this.resolveDns}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
@@ -332,6 +343,7 @@ class NetworkClusterApp {
       const realData = await this.fetchRealNetworkData();
       if (realData && realData.nodes && realData.nodes.length > 0) {
         this.currentTopology = realData;
+        this.chart.options.resolveDns = this.resolveDns;
         this.updateRealHostUI(realData.meta);
         this.populatePortDropdown(realData.connections);
         this.reclusterTopology();
@@ -376,8 +388,14 @@ class NetworkClusterApp {
     }
 
     if (this.telemetryStatusBadge) {
-      this.telemetryStatusBadge.textContent = 'REAL TELEMETRY';
-      this.telemetryStatusBadge.style.color = '#38bdf8';
+      if (this.resolveDns) {
+        const resolvedCount = this.currentTopology?.nodes?.filter(n => n.dnsName).length || 0;
+        this.telemetryStatusBadge.textContent = `DNS ACTIVE (${resolvedCount} PTRs)`;
+        this.telemetryStatusBadge.style.color = '#34d399';
+      } else {
+        this.telemetryStatusBadge.textContent = 'REAL TELEMETRY';
+        this.telemetryStatusBadge.style.color = '#38bdf8';
+      }
     }
 
     if (this.processChipsContainer && meta.activeProcesses) {

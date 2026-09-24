@@ -48,8 +48,9 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             scope = params.get('scope', ['all'])[0]
             k_val = params.get('k', ['4'])[0]
             target_k = int(k_val) if k_val.isdigit() else 4
+            resolve_dns = params.get('resolve_dns', ['false'])[0].lower() in ('true', '1', 'yes')
 
-            data = collector.get_topology(scope=scope, target_k=target_k)
+            data = collector.get_topology(scope=scope, target_k=target_k, resolve_dns=resolve_dns)
             payload = json.dumps(data).encode('utf-8')
 
             self.send_response(200)
