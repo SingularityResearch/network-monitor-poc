@@ -184,4 +184,177 @@ export class NetworkDataGenerator {
       subnetGateways: subnetCenters,
     };
   }
+
+  /**
+   * Smoothly evolve existing topology:
+   * Retains node identities and subnets, applies continuous organic drift,
+   * dynamically opens and closes socket connections, and fluctuates traffic rates.
+   */
+  static evolveTopology(prevTopology, {
+    nodeCount = 120,
+    numSubnets = 4,
+    connectionDensity = 1.3,
+    distribution = 'blobs',
+  } = {}) {
+    if (!prevTopology || !prevTopology.nodes || prevTopology.nodes.length === 0) {
+      return this.generateTopology({ nodeCount, numSubnets, connectionDensity, distribution });
+    }
+
+    let subnetCenters = prevTopology.subnetGateways ? prevTopology.subnetGateways.map(g => ({ ...g })) : [];
+
+    // If numSubnets changed, regenerate subnet centers
+    if (subnetCenters.length !== numSubnets) {
+      subnetCenters = [];
+      for (let s = 0; s < numSubnets; s++) {
+        const angle = (s / numSubnets) * Math.PI * 2 + (Math.random() * 0.4 - 0.2);
+        const radius = 24 + Math.random() * 12;
+        subnetCenters.push({
+          subnetIdx: s,
+          gatewayIP: this.generateIP(s, 1),
+          x: 50 + radius * Math.cos(angle),
+          y: 50 + radius * Math.sin(angle),
+          spread: 7 + Math.random() * 3,
+        });
+      }
+    } else {
+      // Subtle continuous drift of subnet centers
+      subnetCenters.forEach(c => {
+        c.x = this.clamp(c.x + (Math.random() - 0.5) * 0.5, 20, 80);
+        c.y = this.clamp(c.y + (Math.random() - 0.5) * 0.5, 20, 80);
+      });
+    }
+
+    let nodes = prevTopology.nodes.map(n => ({
+      ...n,
+      connections: [],
+    }));
+
+    // Adjust node count if slider changed
+    if (nodes.length < nodeCount) {
+      for (let i = nodes.length; i < nodeCount; i++) {
+        const subnetIdx = i % numSubnets;
+        const center = subnetCenters[subnetIdx];
+        let x, y;
+        if (distribution === 'uniform') {
+          x = 5 + Math.random() * 90;
+          y = 5 + Math.random() * 90;
+        } else {
+          x = this.clamp(this.randomGaussian(center.x, center.spread));
+          y = this.clamp(this.randomGaussian(center.y, center.spread));
+        }
+        nodes.push({
+          id: i,
+          ip: this.generateIP(subnetIdx, i + 2),
+          hostname: this.generateHostname(subnetIdx, i + 1),
+          subnetIdx,
+          x: Number(x.toFixed(2)),
+          y: Number(y.toFixed(2)),
+          trafficMbps: Number((1.5 + Math.random() * 45).toFixed(1)),
+          connections: [],
+        });
+      }
+    } else if (nodes.length > nodeCount) {
+      nodes = nodes.slice(0, nodeCount);
+    }
+
+    // Evolve nodes with organic random walk towards cluster centers
+    nodes.forEach(node => {
+      const subnetIdx = node.subnetIdx % numSubnets;
+      node.subnetIdx = subnetIdx;
+      const center = subnetCenters[subnetIdx];
+
+      if (distribution === 'uniform') {
+        node.x = this.clamp(Number((node.x + (Math.random() - 0.5) * 1.2).toFixed(2)), 6, 94);
+        node.y = this.clamp(Number((node.y + (Math.random() - 0.5) * 1.2).toFixed(2)), 6, 94);
+      } else {
+        const pullFactor = 0.04;
+        const drift = 1.0;
+        const dx = (center.x - node.x) * pullFactor + (Math.random() - 0.5) * drift;
+        const dy = (center.y - node.y) * pullFactor + (Math.random() - 0.5) * drift;
+        node.x = this.clamp(Number((node.x + dx).toFixed(2)), 6, 94);
+        node.y = this.clamp(Number((node.y + dy).toFixed(2)), 6, 94);
+      }
+
+      // Smooth traffic fluctuation (+/- 8%)
+      const deltaTraffic = (Math.random() - 0.49) * 3.5;
+      node.trafficMbps = Math.max(0.5, Math.min(150, Number((node.trafficMbps + deltaTraffic).toFixed(1))));
+    });
+
+    // Evolve Connections
+    const oldConns = prevTopology.connections || [];
+    const connections = [];
+    let maxConnId = oldConns.length > 0 ? Math.max(...oldConns.map(c => c.id || 0)) : 0;
+
+    // Retain ~85% of connections
+    oldConns.forEach(c => {
+      if (c.srcId < nodes.length && c.destId < nodes.length && Math.random() < 0.86) {
+        const srcNode = nodes[c.srcId];
+        const destNode = nodes[c.destId];
+        const isCross = srcNode.subnetIdx !== destNode.subnetIdx;
+
+        const updatedConn = {
+          ...c,
+          srcIP: srcNode.ip,
+          destIP: destNode.ip,
+          isCrossSubnet: isCross,
+          latencyMs: Math.max(0.8, Number((c.latencyMs + (Math.random() - 0.5) * 1.4).toFixed(1))),
+          throughputKbps: Math.max(25, Math.floor(c.throughputKbps + (Math.random() - 0.5) * 300)),
+        };
+        connections.push(updatedConn);
+        srcNode.connections.push(updatedConn);
+      }
+    });
+
+    // Add new connections to meet target density
+    const targetConnCount = Math.floor(nodes.length * connectionDensity);
+    while (connections.length < targetConnCount) {
+      const srcIdx = Math.floor(Math.random() * nodes.length);
+      let destIdx = Math.floor(Math.random() * nodes.length);
+      if (destIdx === srcIdx) destIdx = (srcIdx + 1) % nodes.length;
+
+      const srcNode = nodes[srcIdx];
+      const destNode = nodes[destIdx];
+
+      let portConfig;
+      if (destNode.subnetIdx === 2) {
+        portConfig = Math.random() > 0.4 ? WELL_KNOWN_PORTS[4] : WELL_KNOWN_PORTS[5];
+      } else if (destNode.subnetIdx === 0 || destNode.subnetIdx === 3) {
+        const webPorts = [WELL_KNOWN_PORTS[0], WELL_KNOWN_PORTS[1], WELL_KNOWN_PORTS[7]];
+        portConfig = webPorts[Math.floor(Math.random() * webPorts.length)];
+      } else {
+        portConfig = WELL_KNOWN_PORTS[Math.floor(Math.random() * WELL_KNOWN_PORTS.length)];
+      }
+
+      const isCrossSubnet = srcNode.subnetIdx !== destNode.subnetIdx;
+      const latencyMs = Number((isCrossSubnet ? 12 + Math.random() * 35 : 1 + Math.random() * 4).toFixed(1));
+      const throughputKbps = Math.floor(50 + Math.random() * 8500);
+
+      const newConn = {
+        id: ++maxConnId,
+        srcId: srcNode.id,
+        destId: destNode.id,
+        srcIP: srcNode.ip,
+        destIP: destNode.ip,
+        destPort: portConfig.port,
+        service: portConfig.service,
+        proto: portConfig.proto,
+        color: portConfig.color,
+        category: portConfig.category,
+        isCrossSubnet,
+        latencyMs,
+        throughputKbps,
+        packetPhase: Math.random(),
+        packetSpeed: 0.008 + Math.random() * 0.012,
+      };
+
+      connections.push(newConn);
+      srcNode.connections.push(newConn);
+    }
+
+    return {
+      nodes,
+      connections,
+      subnetGateways: subnetCenters,
+    };
+  }
 }

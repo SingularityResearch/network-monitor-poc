@@ -81,9 +81,10 @@ export class KMeans {
   /**
    * Fit K-Means on the points
    * @param {Array<{x: number, y: number}>} points
+   * @param {Array<{x: number, y: number}>} [previousCentroids=null] - Optional previous centroids to maintain stable cluster identities
    * @returns {Object} clustering result
    */
-  fit(points) {
+  fit(points, previousCentroids = null) {
     if (!points || points.length === 0) {
       return {
         centroids: [],
@@ -96,7 +97,12 @@ export class KMeans {
     }
 
     const actualK = Math.min(this.k, points.length);
-    let centroids = this.initCentroids(points).slice(0, actualK);
+    let centroids;
+    if (previousCentroids && previousCentroids.length === actualK) {
+      centroids = previousCentroids.map((c) => ({ x: c.x, y: c.y }));
+    } else {
+      centroids = this.initCentroids(points).slice(0, actualK);
+    }
     const history = []; // captures centroid states per iteration
 
     let assignments = new Int32Array(points.length);
@@ -187,6 +193,55 @@ export class KMeans {
         }
       }
       assignments[i] = bestCluster;
+    }
+
+    // Stable index alignment to previous centroids
+    if (previousCentroids && previousCentroids.length === actualK) {
+      const availablePrev = new Set(previousCentroids.map((_, idx) => idx));
+      const remap = new Int32Array(actualK); // newIdx -> prevIdx
+
+      const pairs = [];
+      for (let i = 0; i < actualK; i++) {
+        for (let j = 0; j < actualK; j++) {
+          pairs.push({ i, j, dist: KMeans.distanceSq(centroids[i], previousCentroids[j]) });
+        }
+      }
+      pairs.sort((a, b) => a.dist - b.dist);
+
+      const usedNew = new Set();
+      for (const p of pairs) {
+        if (!usedNew.has(p.i) && availablePrev.has(p.j)) {
+          remap[p.i] = p.j;
+          usedNew.add(p.i);
+          availablePrev.delete(p.j);
+        }
+      }
+
+      // Ensure any remaining unmatched indices are paired
+      const unusedNew = [];
+      for (let i = 0; i < actualK; i++) {
+        if (!usedNew.has(i)) unusedNew.push(i);
+      }
+      const unusedPrev = Array.from(availablePrev);
+      for (let idx = 0; idx < unusedNew.length; idx++) {
+        remap[unusedNew[idx]] = unusedPrev[idx];
+      }
+
+      const orderedCentroids = new Array(actualK);
+      for (let i = 0; i < actualK; i++) {
+        orderedCentroids[remap[i]] = centroids[i];
+      }
+      for (let i = 0; i < actualK; i++) {
+        if (!orderedCentroids[i]) {
+          orderedCentroids[i] = centroids[i] || { x: 50, y: 50 };
+        }
+      }
+      centroids = orderedCentroids;
+
+      for (let i = 0; i < points.length; i++) {
+        const mapped = remap[assignments[i]];
+        assignments[i] = (mapped !== undefined && mapped >= 0 && mapped < actualK) ? mapped : 0;
+      }
     }
 
     // Calculate Inertia (Within-Cluster Sum of Squares)

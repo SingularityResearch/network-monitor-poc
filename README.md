@@ -46,12 +46,14 @@ In the dashboard controls, easily filter your view:
 
 ---
 
-## Telemetry Burst & Auto-Refresh Lifecycle
-
-- Configurable interval bursts (5s, 10s, 15s, 20s):
-  - Polls `/api/network-telemetry` to pull the latest system socket state, bandwidth rates, and active processes.
-  - Re-computes optimal Subnet Gateways, WCSS Inertia, and Silhouette cohesion.
-  - Smooth animated countdown bar indicates when the next burst occurs.
+## Continuous Real-Time Telemetry Stream & Smooth Animations
+ 
+- **Continuous Live Streaming**:
+  - Continuously ingests live system socket state, bandwidth rates, and active processes without discrete burst intervals.
+  - Re-computes optimal Subnet Gateways, WCSS Inertia, and Silhouette cohesion continuously.
+  - Hardware-accelerated 60 FPS Canvas engine smoothly glides nodes and Subnet Gateways to their target coordinates using exponential interpolation (lerp).
+  - Subtle organic micro-motion gives network nodes a living, breathing cyber-physical constellation feel.
+  - Interactive live stream equalizer visualizer with real-time FPS telemetry indicator.
   - Controls: **Pause/Resume** (or press <kbd>Space</kbd>) and **Refresh Now**.
 
 ---

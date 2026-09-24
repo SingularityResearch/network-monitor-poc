@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>K-Means Network IP & Port Connection Visualizer</title>
-  <meta name="description" content="Real-time Network IP Clustering & Socket Connection visualizer. Randomly generates IP topology every 10s and displays K-Means Subnet Gateway centroids, IP nodes, and port-level socket traffic.">
+  <meta name="description" content="Continuous Real-time Network IP Clustering & Socket Connection visualizer. Smoothly animates live Linux network topology, K-Means Subnet Gateway centroids, IP nodes, and port-level socket traffic.">
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -36,21 +36,47 @@
       </div>
     </div>
 
-    <!-- Live Status & 10s Countdown Bar -->
+    <!-- Live Status & Continuous Stream Visualizer -->
     <div class="stream-status-bar" id="streamStatusBar">
       <div class="live-indicator" id="liveIndicator">
         <span class="live-dot"></span>
-        <span id="liveStatusText">TELEMETRY LIVE</span>
+        <span id="liveStatusText">CONTINUOUS STREAM</span>
       </div>
 
-      <div class="countdown-wrapper" title="Interval until next network telemetry burst">
-        <div class="countdown-labels">
-          <span>Next Burst in</span>
-          <span class="countdown-time" id="countdownTime">10.0s</span>
+      <div class="stream-monitor-wrapper" id="streamMonitorWrapper" title="Continuous Real-time Network Telemetry Stream">
+        <div class="stream-monitor-labels">
+          <span class="stream-label-title">STREAM ENGINE</span>
+          <span class="stream-fps-badge" id="streamFpsBadge">60 FPS</span>
         </div>
-        <div class="countdown-track">
-          <div class="countdown-fill" id="countdownFill"></div>
+        <div class="stream-visualizer" id="streamVisualizer">
+          <div class="stream-bar bar-1"></div>
+          <div class="stream-bar bar-2"></div>
+          <div class="stream-bar bar-3"></div>
+          <div class="stream-bar bar-4"></div>
+          <div class="stream-bar bar-5"></div>
+          <div class="stream-bar bar-6"></div>
+          <div class="stream-bar bar-7"></div>
+          <div class="stream-bar bar-8"></div>
         </div>
+      </div>
+
+      <!-- Quick Action Buttons: Alert Center & Deep Socket Inspector -->
+      <div class="header-action-group">
+        <button class="header-action-btn alert-bell-btn" id="btnToggleAlerts" title="Threshold Alert Center">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
+          <span class="alert-count-pill" id="headerAlertCount">0</span>
+        </button>
+
+        <button class="header-action-btn inspector-btn" id="btnOpenInspector" title="Open Deep Socket &amp; Protocol Inspector">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 17 10 11 4 5"></polyline>
+            <line x1="12" y1="19" x2="20" y2="19"></line>
+          </svg>
+          <span>Socket Inspector</span>
+        </button>
       </div>
     </div>
   </header>
@@ -167,18 +193,6 @@
         </select>
       </div>
 
-      <!-- Interval Selector -->
-      <div class="control-group">
-        <div class="control-label-row">
-          <label for="intervalSelect">Telemetry Burst Interval</label>
-        </div>
-        <select id="intervalSelect" class="styled-select">
-          <option value="5">5 Seconds</option>
-          <option value="10" selected>10 Seconds (Default)</option>
-          <option value="15">15 Seconds</option>
-          <option value="20">20 Seconds</option>
-        </select>
-      </div>
 
       <!-- Display Toggles -->
       <div class="control-group" style="margin-top: 0.3rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 0.6rem;">
@@ -241,6 +255,56 @@
             <span class="slider-switch"></span>
           </div>
         </label>
+
+        <label class="toggle-item" for="toggleGeoip" title="Enrich public IP nodes with Country Flag, City, and ASN info">
+          <span class="toggle-label">GeoIP &amp; ASN Location</span>
+          <div class="toggle-switch">
+            <input type="checkbox" id="toggleGeoip" checked>
+            <span class="slider-switch"></span>
+          </div>
+        </label>
+
+        <label class="toggle-item" for="toggleOrganicDrift" title="Enable subtle organic floating micro-motion on network nodes">
+          <span class="toggle-label">Organic Micro-Motion</span>
+          <div class="toggle-switch">
+            <input type="checkbox" id="toggleOrganicDrift" checked>
+            <span class="slider-switch"></span>
+          </div>
+        </label>
+      </div>
+
+      <!-- Threshold Alerts Settings -->
+      <div class="control-group" style="margin-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 0.6rem;">
+        <div class="control-label-row">
+          <span style="font-size: 0.72rem; text-transform: uppercase; color: var(--accent-amber); font-weight: 700; letter-spacing: 0.04em;">
+            ⚠️ Alert Thresholds
+          </span>
+          <span class="control-value-badge" id="alertsActiveBadge" style="background: rgba(245, 158, 11, 0.18); color: var(--accent-amber);">0 Spikes</span>
+        </div>
+
+        <div style="margin-top: 0.45rem;">
+          <div class="control-label-row" style="margin-bottom: 2px;">
+            <label for="sliderLatencyAlert" style="font-size: 0.75rem;">Latency Spike Alert</label>
+            <span style="font-size: 0.72rem; color: var(--accent-amber); font-family: var(--font-mono); font-weight: 700;" id="valLatencyAlert">&gt; 50 ms</span>
+          </div>
+          <input type="range" id="sliderLatencyAlert" min="10" max="250" value="50" step="5">
+        </div>
+
+        <div style="margin-top: 0.45rem;">
+          <div class="control-label-row" style="margin-bottom: 2px;">
+            <label for="sliderBandwidthAlert" style="font-size: 0.75rem;">Bandwidth Surge Alert</label>
+            <span style="font-size: 0.72rem; color: var(--accent-cyan); font-family: var(--font-mono); font-weight: 700;" id="valBandwidthAlert">&gt; 10 Mbps</span>
+          </div>
+          <input type="range" id="sliderBandwidthAlert" min="2" max="60" value="10" step="2">
+        </div>
+
+        <label class="toggle-item" for="toggleAlertOverlays" style="margin-top: 0.35rem;">
+          <span class="toggle-label" style="font-size: 0.76rem;">Highlight Alert Vectors</span>
+          <div class="toggle-switch">
+            <input type="checkbox" id="toggleAlertOverlays" checked>
+            <span class="slider-switch"></span>
+          </div>
+        </label>
       </div>
     </aside>
 
@@ -256,6 +320,45 @@
       <!-- Interactive Canvas -->
       <div class="canvas-container" id="canvasContainer">
         <canvas id="clusterCanvas"></canvas>
+      </div>
+
+      <!-- Historical Topology Timeline & Playback Bar -->
+      <div class="timeline-bar" id="timelineBar">
+        <div class="timeline-controls">
+          <button class="timeline-btn" id="btnTimelineStepBack" title="Step back 1 snapshot">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="19 20 9 12 19 4 19 20"></polygon>
+              <line x1="5" y1="19" x2="5" y2="5"></line>
+            </svg>
+          </button>
+
+          <button class="timeline-btn timeline-play-btn" id="btnTimelinePlay" title="Play / Pause Timeline Playback">
+            <svg id="timelinePlayIcon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span id="timelinePlayText">Play Replay</span>
+          </button>
+
+          <button class="timeline-btn" id="btnTimelineStepFwd" title="Step forward 1 snapshot">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 4 15 12 5 20 5 4"></polygon>
+              <line x1="19" y1="5" x2="19" y2="19"></line>
+            </svg>
+          </button>
+
+          <button class="timeline-live-btn live-active" id="btnTimelineLive" title="Snap to Live Stream">
+            <span class="live-dot" id="timelineLiveDot"></span>
+            <span>LIVE</span>
+          </button>
+        </div>
+
+        <div class="timeline-slider-wrapper">
+          <input type="range" id="timelineSlider" min="0" max="0" value="0" step="1">
+          <div class="timeline-info-row">
+            <span class="timeline-status-text" id="timelineStatusText">● LIVE TELEMETRY STREAM</span>
+            <span class="timeline-count-text" id="timelineCountText">0 snapshots recorded</span>
+          </div>
+        </div>
       </div>
 
       <!-- Traditional Chart Legend & Explanation -->
@@ -396,11 +499,12 @@
         <!-- Dynamically populated -->
       </div>
 
-      <!-- Recent Bursts History -->
+      <!-- Live Telemetry Stream Feed -->
       <div class="panel-header" style="padding-top:0.4rem;">
         <div class="panel-title" style="font-size:0.86rem;">
-          Recent Telemetry Bursts
+          Continuous Telemetry Feed
         </div>
+        <span class="panel-badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399;">Real-Time</span>
       </div>
       <div class="history-section" id="historyList">
         <!-- Dynamically populated -->
@@ -411,6 +515,84 @@
 
   <!-- Interactive Floating Tooltip -->
   <div class="chart-tooltip" id="chartTooltip"></div>
+
+  <!-- Deep Socket & Protocol Inspector Drawer -->
+  <div class="inspector-drawer-backdrop" id="inspectorBackdrop"></div>
+  <aside class="inspector-drawer" id="inspectorDrawer">
+    <div class="inspector-header">
+      <div class="inspector-title-area">
+        <div class="inspector-badge">
+          <span class="live-dot"></span>
+          <span>LIVE SOCKET INSPECTION</span>
+        </div>
+        <h3 id="inspectorTitle">Active Network Sockets</h3>
+        <p id="inspectorSubtitle">Deep TCP/UDP socket telemetry &amp; kernel connection metrics</p>
+      </div>
+      <div class="inspector-header-actions">
+        <button class="btn btn-secondary btn-sm" id="btnFilterChartToSelection" style="display:none;" title="Filter canvas to this selection">
+          Filter Canvas
+        </button>
+        <button class="inspector-close-btn" id="btnCloseInspector" title="Close Inspector">✕</button>
+      </div>
+    </div>
+
+    <!-- Inspector Toolbar: Filter & Summary Stats -->
+    <div class="inspector-toolbar">
+      <div class="inspector-search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="inspectorSearchInput" placeholder="Filter by IP, port (:443), process (chrome), state (ESTAB)...">
+      </div>
+      <div class="inspector-stats-pills" id="inspectorStatsPills">
+        <span class="inspector-pill">Sockets: <b id="statTotalSockets">0</b></span>
+        <span class="inspector-pill">Avg Latency: <b id="statAvgLatency">-- ms</b></span>
+        <span class="inspector-pill">Total Sent: <b id="statTotalSent">-- MB</b></span>
+      </div>
+    </div>
+
+    <!-- Socket Table Container -->
+    <div class="inspector-table-container">
+      <table class="inspector-table">
+        <thead>
+          <tr>
+            <th>Proto / Port</th>
+            <th>State</th>
+            <th>Local Endpoint</th>
+            <th>Remote Peer &amp; Geo</th>
+            <th>Process (PID)</th>
+            <th>RTT Latency</th>
+            <th>Window / Queues</th>
+          </tr>
+        </thead>
+        <tbody id="inspectorTableBody">
+          <!-- Dynamically populated -->
+        </tbody>
+      </table>
+    </div>
+  </aside>
+
+  <!-- Alerts Drawer -->
+  <div class="alerts-drawer-backdrop" id="alertsBackdrop"></div>
+  <aside class="alerts-drawer" id="alertsDrawer">
+    <div class="alerts-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:1.1rem;">⚠️</span>
+        <div>
+          <h4 style="margin:0;font-size:0.95rem;color:#f1f5f9;">Active Threshold Alerts</h4>
+          <span style="font-size:0.72rem;color:var(--text-muted);" id="alertsSubtitle">Monitors latency spikes &amp; bandwidth surges</span>
+        </div>
+      </div>
+      <button class="alerts-close-btn" id="btnCloseAlerts">✕</button>
+    </div>
+    <div class="alerts-list" id="alertsListContainer">
+      <!-- Dynamically populated -->
+    </div>
+  </aside>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
 
   <!-- Application Logic Modules -->
   <script type="module" src="app.js"></script>
