@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
 Real Network Telemetry Collector for Linux.
-Gathers and analyzes live internal and public network telemetry:
-- Standard IANA/RFC classification via ipaddress (no speculative prefix guessing).
-- True reverse DNS resolution (PTR records) without hardcoded company assumptions.
-- Active TCP/UDP socket telemetry (ss -tunaip -H).
-- Network interfaces and default gateway from Linux kernel routing (ip route, ip addr).
-- ARP cache and LAN discovery (/proc/net/arp, ip neigh, ping sweep).
-- Real TCP performance metrics (RTT latency, throughput, bytes transferred).
-- Real process attribution (chrome, language_server, antigravity-ide, etc.).
-- Dynamic topological layout based on actual discovered subnets and CIDR blocks.
+Extracts live internal and public network topology:
+- Active TCP/UDP socket connections (ss)
+- Network interfaces and default gateway (ip route, ip addr)
+- ARP cache and LAN neighbor discovery (/proc/net/arp, ip neigh, ping sweep)
+- Process attribution (chrome, ide, language_server, sshd, etc.)
+- Real TCP metrics: RTT latency (ms), throughput, bytes sent/received
+- DNS & Provider resolution (cached, non-blocking)
+- Smart 2D topological mapping for K-Means clustering
 """
 
 import os
@@ -23,7 +22,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-# Standard IANA well-known port mappings (service name, protocol, color, category)
+# Well-known service port definitions with colors and categories
 PORT_SERVICES = {
     443: {'service': 'HTTPS', 'proto': 'TCP', 'color': '#10b981', 'category': 'web'},
     80: {'service': 'HTTP', 'proto': 'TCP', 'color': '#06b6d4', 'category': 'web'},
@@ -38,12 +37,13 @@ PORT_SERVICES = {
     8080: {'service': 'HTTP-Alt', 'proto': 'TCP', 'color': '#14b8a6', 'category': 'web'},
     3000: {'service': 'Dev-Web', 'proto': 'TCP', 'color': '#22d3ee', 'category': 'dev'},
     5173: {'service': 'Vite-Dev', 'proto': 'TCP', 'color': '#a78bfa', 'category': 'dev'},
-    5228: {'service': 'Push-Sync', 'proto': 'TCP', 'color': '#f97316', 'category': 'cloud'},
+    5228: {'service': 'GCM-Push', 'proto': 'TCP', 'color': '#f97316', 'category': 'cloud'},
 }
 
 def get_service_for_port(port: int, default_proto: str = 'TCP'):
     if port in PORT_SERVICES:
         return PORT_SERVICES[port]
+    # Local ephemeral or IPC port
     if port >= 32768:
         return {'service': f'IPC-{port}', 'proto': default_proto, 'color': '#94a3b8', 'category': 'ipc'}
     return {'service': f'P-{port}', 'proto': default_proto, 'color': '#64748b', 'category': 'custom'}
@@ -73,7 +73,7 @@ class RealNetworkCollector:
         threading.Thread(target=self.scan_lan_subnet, daemon=True).start()
 
     def get_system_routes(self):
-        """Retrieve default gateway, local IP, interface name, and subnet CIDR from kernel."""
+        """Retrieve default gateway, local IP, and primary network interface."""
         default_gw = '192.168.0.1'
         local_ip = '127.0.0.1'
         iface = 'eth0'
@@ -104,7 +104,7 @@ class RealNetworkCollector:
         }
 
     def update_bandwidth(self, iface: str):
-        """Calculate live RX / TX bandwidth in kbps from /proc/net/dev."""
+        """Calculate live RX / TX bandwidth in kbps."""
         now = time.time()
         try:
             with open('/proc/net/dev', 'r') as f:
@@ -133,6 +133,7 @@ class RealNetworkCollector:
         try:
             routes = self.get_system_routes()
             gw = routes['default_gw']
+            # e.g. 192.168.0.
             prefix = '.'.join(gw.split('.')[:3]) + '.'
 
             def check_host(host_num):
@@ -141,6 +142,7 @@ class RealNetworkCollector:
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return ip if res.returncode == 0 else None
 
+            # Ping first 40 common DHCP/static IP addresses
             with ThreadPoolExecutor(max_workers=20) as pool:
                 results = pool.map(check_host, range(1, 41))
             
@@ -157,6 +159,7 @@ class RealNetworkCollector:
     def get_arp_hosts(self):
         """Read kernel ARP table and neighbor cache."""
         arp_hosts = set()
+        # From /proc/net/arp
         try:
             with open('/proc/net/arp', 'r') as f:
                 for line in f.readlines()[1:]:
@@ -166,6 +169,7 @@ class RealNetworkCollector:
         except Exception:
             pass
 
+        # From ip neigh
         try:
             out = subprocess.check_output(['ip', 'neigh'], stderr=subprocess.DEVNULL).decode('utf-8', errors='ignore')
             for line in out.splitlines():
@@ -179,108 +183,110 @@ class RealNetworkCollector:
         return arp_hosts
 
     def resolve_ip(self, ip_str: str, routes: dict) -> dict:
-        """
-        Classify IP strictly based on standard IANA/RFC definitions and kernel routing.
-        Performs genuine DNS PTR reverse lookups without hardcoded company assumptions.
-        """
-        clean_ip = ip_str.split('%')[0].strip()
+        """Resolve IP classification, provider, hostname, and zone."""
+        clean_ip = ip_str.split('%')[0]
+        
+        if clean_ip in self.dns_cache:
+            return self.dns_cache[clean_ip]
 
-        with self.lock:
-            if clean_ip in self.dns_cache:
-                return self.dns_cache[clean_ip]
+        # Determine IP type
+        is_loopback = False
+        is_private = False
+        is_multicast = False
 
-        # 1. Parse standard IP address object
         try:
             ip_obj = ipaddress.ip_address(clean_ip)
             is_loopback = ip_obj.is_loopback
             is_private = ip_obj.is_private
-            is_link_local = ip_obj.is_link_local
             is_multicast = ip_obj.is_multicast
-            is_global = ip_obj.is_global
         except ValueError:
-            ip_obj = None
-            is_loopback = clean_ip in ('127.0.0.1', '::1')
-            is_private = clean_ip.startswith(('192.168.', '10.', '172.'))
-            is_link_local = False
-            is_multicast = False
-            is_global = not is_loopback and not is_private
-
-        # 2. Match local subnet
-        local_net = None
-        try:
-            local_net = ipaddress.ip_network(routes.get('subnet_cidr', '192.168.0.0/24'), strict=False)
-        except Exception:
             pass
 
-        is_internal = is_loopback or is_private or is_link_local
-        
-        # 3. Categorize zone and compute factual CIDR prefix
-        if is_loopback:
-            zone = 'Loopback IPC'
-            prefix = '127.0.0.0/8' if (ip_obj and ip_obj.version == 4) else '::1/128'
-        elif clean_ip == routes.get('default_gw'):
-            zone = 'Default Gateway'
-            prefix = str(local_net) if local_net else 'Local Subnet'
-        elif clean_ip == routes.get('local_ip'):
-            zone = 'Local Host'
-            prefix = str(local_net) if local_net else 'Local Subnet'
-        elif local_net and ip_obj and ip_obj in local_net:
-            zone = 'Local LAN'
-            prefix = str(local_net)
-        elif is_private:
-            zone = 'Private Network'
-            prefix = str(ipaddress.ip_network(f"{clean_ip}/24", strict=False)) if (ip_obj and ip_obj.version == 4) else 'Private'
-        elif is_link_local:
-            zone = 'Link-Local'
-            prefix = '169.254.0.0/16'
-        elif is_multicast:
-            zone = 'Multicast'
-            prefix = '224.0.0.0/4'
-        else:
-            zone = 'Public Internet'
-            # Group public IPv4 by /16 routing block
-            if ip_obj and ip_obj.version == 4:
-                prefix = str(ipaddress.ip_network(f"{clean_ip}/16", strict=False))
-            else:
-                prefix = 'Public Internet'
-
-        # 4. Genuine Hostname Resolution via DNS PTR records (NO speculative guessing)
         hostname = clean_ip
-        domain = ''
-        
-        if is_loopback:
+        zone = "Public Internet"
+        org = "Internet"
+        subnet_category = 2
+
+        if clean_ip == '127.0.0.1' or is_loopback:
             hostname = 'localhost'
-        elif clean_ip == routes.get('local_ip'):
+            zone = 'Loopback IPC'
+            org = 'Local Machine'
+            subnet_category = 1
+        elif clean_ip == routes['default_gw']:
+            hostname = 'Default Gateway (Router)'
+            zone = 'Internal LAN'
+            org = 'Home/Office Router'
+            subnet_category = 0
+        elif clean_ip == routes['local_ip']:
+            hostname = f"Host ({routes['iface']})"
+            zone = 'Internal LAN'
+            org = 'This Host'
+            subnet_category = 0
+        elif is_private or clean_ip.startswith('192.168.') or clean_ip.startswith('10.') or clean_ip.startswith('172.17.'):
+            zone = 'Internal LAN'
+            org = 'LAN Device'
+            subnet_category = 0
+            # Try reverse DNS for LAN
             try:
-                hostname = socket.gethostname()
+                name = socket.gethostbyaddr(clean_ip)[0]
+                hostname = name.split('.')[0]
             except Exception:
-                hostname = clean_ip
-        elif clean_ip == routes.get('default_gw'):
-            hostname = 'Default Gateway'
+                hostname = f"lan-{clean_ip.split('.')[-1]}"
+        elif clean_ip.startswith('140.82.') or clean_ip.startswith('192.30.252.'):
+            hostname = 'github.com'
+            zone = 'Public Web & APIs'
+            org = 'GitHub'
+            subnet_category = 3
+        elif clean_ip.startswith('185.199.'):
+            hostname = 'github.io (Pages)'
+            zone = 'Public Web & APIs'
+            org = 'GitHub CDN'
+            subnet_category = 3
+        elif clean_ip.startswith('142.250.') or clean_ip.startswith('142.251.') or clean_ip.startswith('172.217.'):
+            hostname = 'google.com (Search/APIs)'
+            zone = 'Public Cloud'
+            org = 'Google'
+            subnet_category = 2
+        elif clean_ip.startswith('34.') or clean_ip.startswith('35.'):
+            hostname = 'google-cloud.com'
+            zone = 'Public Cloud'
+            org = 'Google Cloud Platform'
+            subnet_category = 2
+        elif clean_ip.startswith('151.101.') or clean_ip.startswith('199.232.'):
+            hostname = 'fastly-cdn.net'
+            zone = 'Public Web & APIs'
+            org = 'Fastly CDN'
+            subnet_category = 3
+        elif clean_ip.startswith('104.') or clean_ip.startswith('172.64.') or clean_ip.startswith('162.158.'):
+            hostname = 'cloudflare.com'
+            zone = 'Public Web & APIs'
+            org = 'Cloudflare'
+            subnet_category = 3
+        elif clean_ip.startswith('4.') or clean_ip.startswith('20.') or clean_ip.startswith('52.'):
+            hostname = 'azure.com'
+            zone = 'Public Cloud'
+            org = 'Microsoft Azure'
+            subnet_category = 2
         else:
-            # Query actual DNS PTR record
+            # Fast reverse lookup
             try:
-                ptr_name = socket.gethostbyaddr(clean_ip)[0]
-                if ptr_name:
-                    hostname = ptr_name.rstrip('.')
-                    parts = hostname.split('.')
-                    if len(parts) >= 2:
-                        domain = '.'.join(parts[-2:])
+                name = socket.getnameinfo((clean_ip, 0), socket.NI_NAMEREQD)[0]
+                parts = name.split('.')
+                hostname = '.'.join(parts[-2:]) if len(parts) >= 2 else name
+                org = parts[-2].capitalize() if len(parts) >= 2 else 'Internet'
             except Exception:
-                # No PTR record found in DNS - keep exact IP address as hostname
                 hostname = clean_ip
+                org = 'Public Host'
 
         res = {
             'ip': clean_ip,
             'hostname': hostname,
-            'domain': domain,
             'zone': zone,
-            'is_internal': is_internal,
-            'prefix': prefix
+            'org': org,
+            'is_internal': is_loopback or is_private,
+            'subnet_category': subnet_category
         }
-
-        with self.lock:
-            self.dns_cache[clean_ip] = res
+        self.dns_cache[clean_ip] = res
         return res
 
     def parse_endpoint(self, addr_str: str):
@@ -318,9 +324,11 @@ class RealNetworkCollector:
                 local_str = parts[4]
                 peer_str = parts[5] if len(parts) > 5 else '*:*'
 
+                # Process attribution
                 proc_m = re.search(r'users:\(\(\"([^\"]+)\"', line)
                 proc_name = proc_m.group(1) if proc_m else ''
 
+                # Check indented line for TCP metrics
                 metrics = {}
                 if i < len(raw_lines) and (raw_lines[i].startswith('\t') or raw_lines[i].startswith(' ')):
                     mline = raw_lines[i]
@@ -354,26 +362,29 @@ class RealNetworkCollector:
 
     def get_topology(self, scope: str = 'all', target_k: int = 4):
         """
-        Assemble network topology dynamically:
-        - Nodes categorized by actual CIDR prefix and DNS PTR records.
-        - Connections with real kernel RTT, throughput, and processes.
-        - Subnet Gateways dynamically anchored around discovered network blocks.
-        - System interface telemetry.
+        Assemble the full network topology:
+        - Nodes (Internal LAN, Loopback, Public Cloud, Public Web)
+        - Connections (Real sockets with ports, latency, throughput, processes)
+        - Subnet Gateway Centroids
+        - NOC Telemetry Metadata
         """
         routes = self.get_system_routes()
         self.update_bandwidth(routes['iface'])
         
+        # Periodic background LAN refresh (every 45s)
         if time.time() - self.last_scan_time > 45:
             threading.Thread(target=self.scan_lan_subnet, daemon=True).start()
 
         raw_sockets = self.collect_live_sockets()
         arp_hosts = self.get_arp_hosts()
         
+        # Combine ARP hosts with ping-discovered hosts
         with self.lock:
             all_lan_hosts = set(arp_hosts).union(self.discovered_lan_hosts)
             all_lan_hosts.add(routes['default_gw'])
             all_lan_hosts.add(routes['local_ip'])
 
+        # Filter and track active / recent connections
         now = time.time()
         for sock in raw_sockets:
             if sock['peer_ip'] in ('*', '0.0.0.0', '::', ''):
@@ -384,6 +395,7 @@ class RealNetworkCollector:
                 'last_seen': now
             }
 
+        # Purge stale connections older than history window
         cutoff = now - self.history_window_sec
         active_entries = []
         for k, v in list(self.recent_connections.items()):
@@ -392,6 +404,7 @@ class RealNetworkCollector:
             else:
                 del self.recent_connections[k]
 
+        # Collect unique IP nodes
         node_ip_set = set()
         for sock in active_entries:
             if sock['local_ip'] not in ('0.0.0.0', '*', '::'):
@@ -399,14 +412,15 @@ class RealNetworkCollector:
             if sock['peer_ip'] not in ('0.0.0.0', '*', '::'):
                 node_ip_set.add(sock['peer_ip'])
 
+        # Ensure all LAN hosts are included in internal scope
         for lh in all_lan_hosts:
             node_ip_set.add(lh)
 
+        # Ensure localhost is included
         node_ip_set.add('127.0.0.1')
 
         # Filter nodes according to Scope ('all', 'internal', 'public')
         filtered_ips = []
-        ip_info_map = {}
         for ip in node_ip_set:
             info = self.resolve_ip(ip, routes)
             if scope == 'internal' and not info['is_internal']:
@@ -414,48 +428,18 @@ class RealNetworkCollector:
             if scope == 'public' and info['is_internal'] and ip not in (routes['local_ip'], routes['default_gw']):
                 continue
             filtered_ips.append(ip)
-            ip_info_map[ip] = info
 
-        # Dynamically discover all unique network prefixes present in the active nodes
-        lan_cidr = routes.get('subnet_cidr', '192.168.0.0/24')
-        discovered_subnets = []
-        
-        # Priority order: Local LAN first, Loopback second, then other discovered prefixes
-        has_lan = any(ip_info_map[ip]['prefix'] == lan_cidr for ip in filtered_ips)
-        has_loop = any(ip_info_map[ip]['is_internal'] and '127.' in ip for ip in filtered_ips)
-        
-        if has_lan:
-            discovered_subnets.append(lan_cidr)
-        if has_loop:
-            discovered_subnets.append('127.0.0.0/8')
-            
-        for ip in filtered_ips:
-            pref = ip_info_map[ip]['prefix']
-            if pref not in discovered_subnets:
-                discovered_subnets.append(pref)
-
-        # Build dynamic 2D centers for each discovered subnet
-        subnet_center_map = {}
-        subnet_gateways = []
-
-        for idx, pref in enumerate(discovered_subnets):
-            if pref == lan_cidr:
-                cx, cy = 25.0, 28.0
-                name = f"{pref} (Local LAN)"
-            elif pref == '127.0.0.0/8' or pref == '::1/128':
-                cx, cy = 25.0, 75.0
-                name = f"{pref} (Loopback IPC)"
-            else:
-                # Distribute public / external subnets smoothly along right hemisphere
-                other_idx = idx - (1 if has_lan else 0) - (1 if has_loop else 0)
-                total_other = max(1, len(discovered_subnets) - (1 if has_lan else 0) - (1 if has_loop else 0))
-                angle = (other_idx / float(total_other)) * math.pi - (math.pi / 2.0)
-                cx = round(72.0 + 16.0 * math.cos(angle), 2)
-                cy = round(50.0 + 32.0 * math.sin(angle), 2)
-                name = f"{pref} (Public Subnet)"
-
-            subnet_center_map[pref] = {'x': cx, 'y': cy, 'index': idx, 'name': name}
-            subnet_gateways.append({'x': cx, 'y': cy, 'name': name, 'prefix': pref})
+        # Coordinate Anchor Centers for 4 Natural Topologic Subnets:
+        # Zone 0: Internal LAN (Top-Left / (25, 28))
+        # Zone 1: Loopback IPC (Bottom-Left / (25, 75))
+        # Zone 2: Public Cloud (Bottom-Right / (75, 75))
+        # Zone 3: Public CDNs & APIs (Top-Right / (75, 28))
+        ZONE_CENTERS = [
+            {'x': 25.0, 'y': 28.0, 'name': 'Internal LAN (192.168.0.*)'},
+            {'x': 25.0, 'y': 75.0, 'name': 'Loopback IPC (127.0.0.*)'},
+            {'x': 75.0, 'y': 75.0, 'name': 'Public Cloud (Google / Azure / AWS)'},
+            {'x': 75.0, 'y': 28.0, 'name': 'Public Web & CDNs (GitHub / Fastly)'},
+        ]
 
         def hash_str(s: str) -> int:
             return int(hashlib.md5(s.encode()).hexdigest()[:8], 16)
@@ -465,6 +449,7 @@ class RealNetworkCollector:
         ip_process_map = {}
         ip_traffic_map = {}
 
+        # Attribute processes and traffic to IPs
         for s in active_entries:
             p = s['process']
             if p:
@@ -476,30 +461,30 @@ class RealNetworkCollector:
             total_mb = (sent + rcv) / (1024.0 * 1024.0)
             ip_traffic_map[s['peer_ip']] = round(ip_traffic_map.get(s['peer_ip'], 0.0) + total_mb, 2)
 
+        # Build Node Objects
         for idx, ip in enumerate(filtered_ips):
-            info = ip_info_map[ip]
-            pref = info['prefix']
-            center_info = subnet_center_map.get(pref, {'x': 50.0, 'y': 50.0, 'index': 0})
-            center_x = center_info['x']
-            center_y = center_info['y']
-            cat = center_info['index']
+            info = self.resolve_ip(ip, routes)
+            cat = info['subnet_category']
+            center = ZONE_CENTERS[cat % len(ZONE_CENTERS)]
 
+            # Deterministic, stable spatial coordinates for each IP
             hv = hash_str(ip)
             angle = (hv % 360) * (math.pi / 180.0)
-
+            
+            # Anchor key hosts precisely at cluster nexus
             if ip == routes['default_gw']:
-                x = center_x
-                y = center_y
+                x = center['x']
+                y = center['y']
             elif ip == routes['local_ip']:
-                x = center_x + 5.0
-                y = center_y - 3.0
+                x = center['x'] + 5.0
+                y = center['y'] - 3.0
             elif ip == '127.0.0.1':
-                x = center_x
-                y = center_y
+                x = center['x']
+                y = center['y']
             else:
-                dist = 3.5 + (hv % 70) / 10.0
-                x = max(6.0, min(94.0, center_x + dist * math.cos(angle)))
-                y = max(6.0, min(94.0, center_y + dist * math.sin(angle)))
+                dist = 4.0 + (hv % 85) / 10.0
+                x = max(6.0, min(94.0, center['x'] + dist * math.cos(angle)))
+                y = max(6.0, min(94.0, center['y'] + dist * math.sin(angle)))
 
             proc = ip_process_map.get(ip, '')
             traffic = ip_traffic_map.get(ip, round(1.2 + (hv % 40) / 10.0, 1))
@@ -508,10 +493,9 @@ class RealNetworkCollector:
                 'id': idx,
                 'ip': ip,
                 'hostname': info['hostname'],
-                'domain': info['domain'],
-                'prefix': pref,
                 'subnetIdx': cat,
                 'zone': info['zone'],
+                'org': info['org'],
                 'isInternal': info['is_internal'],
                 'x': round(x, 2),
                 'y': round(y, 2),
@@ -536,6 +520,7 @@ class RealNetworkCollector:
             src_idx = ip_to_node_idx[src_ip]
             dest_idx = ip_to_node_idx[dest_ip]
 
+            # Avoid redundant duplicate arrows between same endpoints on same port
             pair_key = (src_idx, dest_idx, s['peer_port'])
             if pair_key in seen_pairs:
                 continue
@@ -550,6 +535,7 @@ class RealNetworkCollector:
             metrics = s.get('metrics', {})
             latency = metrics.get('rtt', None)
             if latency is None:
+                # Estimate realistic latency based on network path
                 is_loop = src_node['isInternal'] and dest_node['isInternal'] and '127.' in src_ip
                 if is_loop:
                     latency = 0.05
@@ -584,7 +570,7 @@ class RealNetworkCollector:
             connections.append(conn)
             src_node['connections'].append(conn)
 
-        # Connect local host to gateway if no active connection is already logged
+        # Also connect local host to LAN neighbors if no active socket exists
         if routes['local_ip'] in ip_to_node_idx and routes['default_gw'] in ip_to_node_idx:
             local_idx = ip_to_node_idx[routes['local_ip']]
             gw_idx = ip_to_node_idx[routes['default_gw']]
@@ -612,6 +598,7 @@ class RealNetworkCollector:
                 connections.append(conn)
                 nodes[local_idx]['connections'].append(conn)
 
+        # Identify unique processes
         active_processes = sorted(list(set(n['process'] for n in nodes if n['process'])))
 
         internal_nodes_count = sum(1 for n in nodes if n['isInternal'])
@@ -622,7 +609,7 @@ class RealNetworkCollector:
         return {
             'nodes': nodes,
             'connections': connections,
-            'subnetGateways': subnet_gateways,
+            'subnetGateways': ZONE_CENTERS,
             'meta': {
                 'source': 'real',
                 'scope': scope,
@@ -645,9 +632,4 @@ if __name__ == '__main__':
     collector = RealNetworkCollector()
     topo = collector.get_topology()
     print(f"Nodes: {len(topo['nodes'])}, Connections: {len(topo['connections'])}")
-    print("Discovered Subnets:")
-    for gw in topo['subnetGateways']:
-        print(f"  - {gw['name']} @ ({gw['x']}, {gw['y']})")
-    print("\nSample Nodes:")
-    for n in topo['nodes'][:8]:
-        print(f"  {n['ip']:16} | prefix: {n['prefix']:16} | zone: {n['zone']:16} | hostname: {n['hostname']}")
+    print("Meta:", topo['meta'])
