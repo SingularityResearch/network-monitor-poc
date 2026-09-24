@@ -1,0 +1,17 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# SQLite Database & WAL logs
+*.db
+*.db-wal
+*.db-shm
+network_history.db
+
+# OS & Editor
+.DS_Store
+*.swp
+.vscode/
+.idea/

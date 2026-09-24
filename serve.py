@@ -20,11 +20,33 @@ import socket
 import webbrowser
 
 from telemetry import RealNetworkCollector
+from database import db
 
 DEFAULT_PORT = 8080
 
 # Global network collector instance
 collector = RealNetworkCollector()
+last_db_record_time = 0.0
+
+def background_history_recorder():
+    """Continuously captures network telemetry snapshots into SQLite with rolling 48-hour retention."""
+    global last_db_record_time
+    while True:
+        try:
+            time.sleep(5.0)
+            now = time.time()
+            if now - last_db_record_time >= 4.5:
+                topo = collector.get_topology(scope='all', target_k=4, resolve_dns=False, resolve_geoip=True)
+                if topo and topo.get('nodes'):
+                    db.record_snapshot(topo)
+                    last_db_record_time = now
+        except Exception:
+            pass
+
+# Start daemon thread to capture background network history
+history_daemon = threading.Thread(target=background_history_recorder, daemon=True, name="SQLiteHistoryRecorder")
+history_daemon.start()
+
 
 class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
     """Handles both static dashboard files and live network telemetry API requests."""
@@ -40,6 +62,14 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def send_json_response(self, data, status_code=200):
+        payload = json.dumps(data).encode('utf-8')
+        self.send_response(status_code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
 
@@ -49,6 +79,7 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if parsed.path == '/api/network-telemetry':
+            global last_db_record_time
             params = urllib.parse.parse_qs(parsed.query)
             scope = params.get('scope', ['all'])[0]
             k_val = params.get('k', ['4'])[0]
@@ -57,24 +88,64 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             resolve_geoip = params.get('resolve_geoip', ['true'])[0].lower() in ('true', '1', 'yes')
 
             data = collector.get_topology(scope=scope, target_k=target_k, resolve_dns=resolve_dns, resolve_geoip=resolve_geoip)
-            payload = json.dumps(data).encode('utf-8')
 
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+            # Record snapshot to SQLite database (rate-limited to at most once per 3s)
+            now = time.time()
+            if now - last_db_record_time >= 3.0:
+                try:
+                    db.record_snapshot(data)
+                    last_db_record_time = now
+                except Exception as err:
+                    print(f"[serve.py] Warning recording snapshot: {err}")
+
+            self.send_json_response(data)
+            return
+
+        elif parsed.path == '/api/history/snapshots':
+            params = urllib.parse.parse_qs(parsed.query)
+            since_val = params.get('since', [None])[0]
+            since = None
+            if since_val is not None:
+                try:
+                    since = float(since_val)
+                except ValueError:
+                    since = None
+            limit_val = params.get('limit', ['150'])[0]
+            limit = int(limit_val) if limit_val.isdigit() else 150
+            summary = params.get('summary', ['true'])[0].lower() in ('true', '1', 'yes')
+
+            snapshots = db.get_snapshots(since=since, limit=limit, summary_only=summary)
+            self.send_json_response({
+                'status': 'ok',
+                'snapshots': snapshots,
+                'count': len(snapshots),
+                'stats': db.get_stats()
+            })
+            return
+
+        elif parsed.path == '/api/history/snapshot':
+            params = urllib.parse.parse_qs(parsed.query)
+            id_val = params.get('id', [None])[0]
+            if id_val and id_val.isdigit():
+                snap = db.get_snapshot_by_id(int(id_val))
+                if snap:
+                    self.send_json_response({'status': 'ok', 'snapshot': snap})
+                else:
+                    self.send_json_response({'status': 'error', 'message': f'Snapshot {id_val} not found'}, status_code=404)
+            else:
+                self.send_json_response({'status': 'error', 'message': 'Missing or invalid id parameter'}, status_code=400)
+            return
+
+        elif parsed.path == '/api/history/stats':
+            self.send_json_response({
+                'status': 'ok',
+                'stats': db.get_stats()
+            })
             return
 
         elif parsed.path == '/api/trigger-scan':
             threading.Thread(target=collector.scan_lan_subnet, daemon=True).start()
-            payload = json.dumps({'status': 'scanning', 'message': 'LAN subnet ping sweep started'}).encode('utf-8')
-
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+            self.send_json_response({'status': 'scanning', 'message': 'LAN subnet ping sweep started'})
             return
 
         # Serve static dashboard files

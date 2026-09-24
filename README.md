@@ -97,6 +97,33 @@ The visualizer includes smooth, hardware-accelerated zoom and pan navigation for
 
 ---
 
+## SQLite Persistent History & 48-Hour Rolling Window
+
+The application includes an embedded, high-performance SQLite storage engine ([database.py](file:///home/shivachrome/source/repos/network-monitor/database.py)) for long-term historical network telemetry recording and timeline replay:
+
+- **Database Architecture**:
+  - File: `network_history.db`
+  - Engine: SQLite 3 configured with Write-Ahead Logging (`PRAGMA journal_mode = WAL;`) and synchronous normal mode for zero lock contention during concurrent background recording and timeline querying.
+  - Snapshot Capture: The background daemon thread `SQLiteHistoryRecorder` captures full network topology snapshots, active processes, and bandwidth rates every 5 seconds.
+- **Strict 48-Hour Rolling Retention Window**:
+  - Automatically prunes records older than 48 hours (`now - 172,800 seconds`):
+    ```sql
+    DELETE FROM snapshots WHERE timestamp < (strftime('%s', 'now') - 172800);
+    ```
+  - Keeps storage strictly bounded (never expands indefinitely).
+  - Snapshot pruning occurs automatically on every insertion and can be queried or triggered manually.
+- **Interactive Historical Timeline & Replay**:
+  - **Timeline Scrubber**: Scrub back in time across the 48-hour archive to inspect past network conditions, anomalies, or high-bandwidth flows.
+  - **Quick Time-Window Chips**: Filter historical windows by `10m`, `1h`, `6h`, `24h`, and `48h (Max)`.
+  - **Replay Playback**: Click **Play Replay** to step through past network topologies sequentially at 1.5-second playback intervals.
+  - **Live Return**: Click **LIVE** to immediately return to real-time live telemetry streaming.
+- **REST API Endpoints**:
+  - `GET /api/history/stats`: Returns database metrics (snapshot count, oldest/newest timestamps, database size in MB, and 48-hour retention coverage percentage).
+  - `GET /api/history/snapshots?since=<seconds>&limit=<count>&summary=true`: Returns snapshot metadata list within the chosen time window.
+  - `GET /api/history/snapshot?id=<id>`: Returns full topology JSON (nodes, socket links, processes) for instant canvas replay.
+
+---
+
 ## Running Locally
 
 Run [serve.py](file:///home/shivachrome/source/repos/network-monitor/serve.py):

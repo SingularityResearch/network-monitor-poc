@@ -1,6 +1,72 @@
 import { KMeans } from './kmeans.js';
-import { WELL_KNOWN_PORTS } from './generator.js';
 import { NetworkClusterChart } from './chart.js';
+
+// Comprehensive well-known destination port catalog and service definitions
+// Comprehensive well-known destination port catalog and service definitions (ordered ascending by port number)
+const WELL_KNOWN_PORTS = [
+  { port: 20, service: 'FTP-Data', proto: 'TCP', color: '#ca8a04', category: 'file' },
+  { port: 21, service: 'FTP', proto: 'TCP', color: '#eab308', category: 'file' },
+  { port: 22, service: 'SSH', proto: 'TCP', color: '#f59e0b', category: 'admin' },
+  { port: 23, service: 'Telnet', proto: 'TCP', color: '#ef4444', category: 'admin' },
+  { port: 25, service: 'SMTP', proto: 'TCP', color: '#f97316', category: 'mail' },
+  { port: 53, service: 'DNS', proto: 'UDP', color: '#3b82f6', category: 'infra' },
+  { port: 67, service: 'DHCP-Server', proto: 'UDP', color: '#6366f1', category: 'infra' },
+  { port: 68, service: 'DHCP-Client', proto: 'UDP', color: '#6366f1', category: 'infra' },
+  { port: 69, service: 'TFTP', proto: 'UDP', color: '#818cf8', category: 'infra' },
+  { port: 80, service: 'HTTP', proto: 'TCP', color: '#06b6d4', category: 'web' },
+  { port: 88, service: 'Kerberos', proto: 'TCP', color: '#475569', category: 'auth' },
+  { port: 110, service: 'POP3', proto: 'TCP', color: '#fb923c', category: 'mail' },
+  { port: 123, service: 'NTP', proto: 'UDP', color: '#8b5cf6', category: 'infra' },
+  { port: 137, service: 'NetBIOS-NS', proto: 'UDP', color: '#fbbf24', category: 'infra' },
+  { port: 138, service: 'NetBIOS-DGM', proto: 'UDP', color: '#f59e0b', category: 'infra' },
+  { port: 139, service: 'NetBIOS-SSN', proto: 'TCP', color: '#d97706', category: 'infra' },
+  { port: 143, service: 'IMAP', proto: 'TCP', color: '#38bdf8', category: 'mail' },
+  { port: 161, service: 'SNMP', proto: 'UDP', color: '#a855f7', category: 'infra' },
+  { port: 162, service: 'SNMP-Trap', proto: 'UDP', color: '#9333ea', category: 'infra' },
+  { port: 389, service: 'LDAP', proto: 'TCP', color: '#64748b', category: 'directory' },
+  { port: 443, service: 'HTTPS', proto: 'TCP', color: '#10b981', category: 'web' },
+  { port: 445, service: 'SMB', proto: 'TCP', color: '#f59e0b', category: 'file' },
+  { port: 465, service: 'SMTPS', proto: 'TCP', color: '#c2410c', category: 'mail' },
+  { port: 587, service: 'SMTP-Sub', proto: 'TCP', color: '#ea580c', category: 'mail' },
+  { port: 636, service: 'LDAPS', proto: 'TCP', color: '#475569', category: 'directory' },
+  { port: 993, service: 'IMAPS', proto: 'TCP', color: '#0284c7', category: 'mail' },
+  { port: 995, service: 'POP3S', proto: 'TCP', color: '#f97316', category: 'mail' },
+  { port: 1433, service: 'MSSQL', proto: 'TCP', color: '#0284c7', category: 'db' },
+  { port: 1434, service: 'MSSQL-Browser', proto: 'UDP', color: '#0284c7', category: 'db' },
+  { port: 1521, service: 'Oracle-DB', proto: 'TCP', color: '#dc2626', category: 'db' },
+  { port: 1883, service: 'MQTT', proto: 'TCP', color: '#14b8a6', category: 'iot' },
+  { port: 2375, service: 'Docker', proto: 'TCP', color: '#0284c7', category: 'devops' },
+  { port: 2376, service: 'Docker-TLS', proto: 'TCP', color: '#0369a1', category: 'devops' },
+  { port: 2379, service: 'etcd-Client', proto: 'TCP', color: '#2563eb', category: 'k8s' },
+  { port: 2380, service: 'etcd-Peer', proto: 'TCP', color: '#1d4ed8', category: 'k8s' },
+  { port: 3000, service: 'Dev-Web', proto: 'TCP', color: '#22d3ee', category: 'dev' },
+  { port: 3001, service: 'Grafana', proto: 'TCP', color: '#f97316', category: 'monitor' },
+  { port: 3306, service: 'MySQL', proto: 'TCP', color: '#a855f7', category: 'db' },
+  { port: 3389, service: 'RDP', proto: 'TCP', color: '#3b82f6', category: 'admin' },
+  { port: 4222, service: 'NATS', proto: 'TCP', color: '#06b6d4', category: 'queue' },
+  { port: 5000, service: 'Flask/API', proto: 'TCP', color: '#f59e0b', category: 'dev' },
+  { port: 5173, service: 'Vite-Dev', proto: 'TCP', color: '#a78bfa', category: 'dev' },
+  { port: 5228, service: 'GCM-Push', proto: 'TCP', color: '#f97316', category: 'cloud' },
+  { port: 5432, service: 'PostgreSQL', proto: 'TCP', color: '#ec4899', category: 'db' },
+  { port: 5672, service: 'RabbitMQ', proto: 'TCP', color: '#ff6600', category: 'queue' },
+  { port: 5900, service: 'VNC', proto: 'TCP', color: '#8b5cf6', category: 'admin' },
+  { port: 6379, service: 'Redis', proto: 'TCP', color: '#f43f5e', category: 'cache' },
+  { port: 6443, service: 'K8s-API', proto: 'TCP', color: '#326ce5', category: 'k8s' },
+  { port: 8000, service: 'Web-Dev', proto: 'TCP', color: '#38bdf8', category: 'web' },
+  { port: 8080, service: 'HTTP-Alt', proto: 'TCP', color: '#14b8a6', category: 'web' },
+  { port: 8443, service: 'HTTPS-Alt', proto: 'TCP', color: '#059669', category: 'web' },
+  { port: 8883, service: 'MQTTS', proto: 'TCP', color: '#0d9488', category: 'iot' },
+  { port: 9042, service: 'Cassandra', proto: 'TCP', color: '#06b6d4', category: 'db' },
+  { port: 9090, service: 'Prometheus', proto: 'TCP', color: '#e11d48', category: 'monitor' },
+  { port: 9092, service: 'Kafka', proto: 'TCP', color: '#7c3aed', category: 'streaming' },
+  { port: 9100, service: 'NodeExporter', proto: 'TCP', color: '#be123c', category: 'monitor' },
+  { port: 9200, service: 'Elasticsearch', proto: 'TCP', color: '#eab308', category: 'search' },
+  { port: 9300, service: 'ES-Cluster', proto: 'TCP', color: '#ca8a04', category: 'search' },
+  { port: 10250, service: 'Kubelet', proto: 'TCP', color: '#3b82f6', category: 'k8s' },
+  { port: 11211, service: 'Memcached', proto: 'TCP', color: '#0ea5e9', category: 'cache' },
+  { port: 15672, service: 'RabbitMQ-Mgmt', proto: 'TCP', color: '#ea580c', category: 'queue' },
+  { port: 27017, service: 'MongoDB', proto: 'TCP', color: '#10b981', category: 'db' },
+];
 
 class NetworkClusterApp {
   constructor() {
@@ -84,6 +150,13 @@ class NetworkClusterApp {
     this.timelineSlider = document.getElementById('timelineSlider');
     this.timelineStatusText = document.getElementById('timelineStatusText');
     this.timelineCountText = document.getElementById('timelineCountText');
+    this.timelineDbPill = document.getElementById('timelineDbPill');
+    this.timelineDbText = document.getElementById('timelineDbText');
+    this.timelineRangeChips = document.getElementById('timelineRangeChips');
+
+    // Sidebar SQLite Database Elements
+    this.sidebarSqliteCount = document.getElementById('sidebarSqliteCount');
+    this.sidebarSqliteSize = document.getElementById('sidebarSqliteSize');
 
     // Live Indicators
     this.liveIndicator = document.getElementById('liveIndicator');
@@ -122,7 +195,12 @@ class NetworkClusterApp {
     this.rawSockets = [];
     this.inspectorFilter = { type: 'all', value: null, search: '' };
 
-    // History Timeline State
+    // History Timeline State (SQLite 48-Hour Rolling Storage)
+    this.sqliteSnapshots = [];
+    this.snapshotCache = new Map();
+    this.selectedRangeSeconds = 172800; // 48 hours rolling window max
+    this.dbStats = null;
+    this.statsPollInterval = null;
     this.historySnapshots = [];
     this.historyIndex = -1; // -1 = live
     this.isTimelinePlaying = false;
@@ -182,6 +260,16 @@ class NetworkClusterApp {
     // Event listeners
     this.attachEventListeners();
 
+    // Start SQLite 48-Hour Rolling History sync
+    this.fetchDatabaseStats();
+    this.fetchHistorySnapshots(this.selectedRangeSeconds);
+    this.statsPollInterval = setInterval(() => {
+      this.fetchDatabaseStats();
+      if (this.historyIndex === -1) {
+        this.fetchHistorySnapshots(this.selectedRangeSeconds, false);
+      }
+    }, 6000);
+
     // Initial Trigger & continuous stream start
     this.generateAndCluster();
     this.startContinuousStream();
@@ -208,7 +296,10 @@ class NetworkClusterApp {
       });
     }
 
-    portMap.forEach(p => {
+    // Sort all ports in strictly ascending numerical order (e.g. 20, 21, 22 ... 1433 ... 27017)
+    const sortedPorts = Array.from(portMap.values()).sort((a, b) => a.port - b.port);
+
+    sortedPorts.forEach(p => {
       const isSel = String(p.port) === String(selectedVal) ? 'selected' : '';
       options += `<option value="${p.port}" ${isSel}>:${p.port} (${p.service} - ${p.proto})</option>`;
     });
@@ -443,6 +534,19 @@ class NetworkClusterApp {
     if (this.timelineSlider) {
       this.timelineSlider.addEventListener('input', (e) => {
         this.scrubToHistory(parseInt(e.target.value, 10));
+      });
+    }
+
+    // Timeline Range Filter Chips (10m, 1h, 6h, 24h, 48h)
+    if (this.timelineRangeChips) {
+      this.timelineRangeChips.addEventListener('click', (e) => {
+        const btn = e.target.closest('.range-chip');
+        if (!btn) return;
+        this.timelineRangeChips.querySelectorAll('.range-chip').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        const range = parseInt(btn.dataset.range, 10);
+        this.selectedRangeSeconds = range;
+        this.fetchHistorySnapshots(range);
       });
     }
 
@@ -1192,72 +1296,190 @@ class NetworkClusterApp {
   }
 
   // ==========================================================================
-  // Historical Topology Timeline & Playback
+  // Historical Topology Timeline & Playback (SQLite 48-Hour Rolling Retention)
   // ==========================================================================
   recordSnapshot(topology, kmeansResult) {
-    if (!topology || !kmeansResult) return;
+    if (!topology) return;
 
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    const snap = {
-      timestamp: now,
-      timeStr,
-      topology: JSON.parse(JSON.stringify(topology)),
-      kmeansResult: JSON.parse(JSON.stringify(kmeansResult)),
-      sockets: JSON.parse(JSON.stringify(this.rawSockets || []))
-    };
-
-    this.historySnapshots.push(snap);
-    // Keep max 30 snapshots in buffer for timeline scrubbing
-    if (this.historySnapshots.length > 30) {
-      this.historySnapshots.shift();
-    }
-
-    if (this.timelineSlider) {
-      this.timelineSlider.max = this.historySnapshots.length - 1;
+    // Trigger asynchronous DB stats & snapshot synchronization periodically
+    const now = Date.now();
+    if (now - this.lastSnapshotRecordTime > 5000) {
+      this.lastSnapshotRecordTime = now;
+      this.fetchDatabaseStats();
       if (this.historyIndex === -1) {
-        this.timelineSlider.value = this.historySnapshots.length - 1;
+        this.fetchHistorySnapshots(this.selectedRangeSeconds, false);
       }
-    }
-
-    if (this.timelineCountText) {
-      const c = this.historySnapshots.length;
-      this.timelineCountText.textContent = `${c} snapshot${c === 1 ? '' : 's'} recorded`;
     }
   }
 
-  scrubToHistory(index) {
-    if (index < 0 || index >= this.historySnapshots.length) return;
+  async fetchDatabaseStats() {
+    try {
+      const res = await fetch('/api/history/stats');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.stats) {
+        this.dbStats = data.stats;
+        this.updateDatabaseUI(data.stats);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch SQLite DB stats:', err);
+    }
+  }
+
+  updateDatabaseUI(stats) {
+    if (this.sidebarSqliteCount) {
+      const count = stats.totalSnapshots || 0;
+      this.sidebarSqliteCount.textContent = `${count} snapshot${count === 1 ? '' : 's'}`;
+    }
+    if (this.sidebarSqliteSize) {
+      this.sidebarSqliteSize.textContent = `${stats.dbSizeMb} MB`;
+    }
+    if (this.timelineDbText) {
+      const count = stats.totalSnapshots || 0;
+      this.timelineDbText.textContent = `SQLite 48h: ${count} snap${count === 1 ? '' : 's'} (${stats.dbSizeMb} MB)`;
+    }
+    if (this.timelineCountText && this.historyIndex === -1) {
+      const count = this.sqliteSnapshots.length || stats.totalSnapshots || 0;
+      this.timelineCountText.textContent = `${count} in 48h DB`;
+    }
+  }
+
+  async fetchHistorySnapshots(rangeSeconds = this.selectedRangeSeconds, resetSlider = true) {
+    try {
+      const url = `/api/history/snapshots?since=${rangeSeconds}&limit=500&summary=true`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.snapshots)) {
+        this.sqliteSnapshots = data.snapshots;
+        if (data.stats) {
+          this.dbStats = data.stats;
+          this.updateDatabaseUI(data.stats);
+        }
+
+        if (this.timelineSlider) {
+          const maxIdx = Math.max(0, this.sqliteSnapshots.length - 1);
+          this.timelineSlider.max = maxIdx;
+          if (this.historyIndex === -1 && resetSlider) {
+            this.timelineSlider.value = maxIdx;
+          }
+        }
+
+        if (this.timelineCountText && this.historyIndex === -1) {
+          const count = this.sqliteSnapshots.length;
+          this.timelineCountText.textContent = `${count} snapshot${count === 1 ? '' : 's'} in window`;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch history snapshots:', err);
+    }
+  }
+
+  async fetchSnapshotTopology(snapshotId) {
+    if (this.snapshotCache.has(snapshotId)) {
+      return this.snapshotCache.get(snapshotId);
+    }
+    try {
+      const res = await fetch(`/api/history/snapshot?id=${snapshotId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data && data.snapshot) {
+        this.snapshotCache.set(snapshotId, data.snapshot);
+        // Keep cache bounded to 150 items to manage browser memory
+        if (this.snapshotCache.size > 150) {
+          const firstKey = this.snapshotCache.keys().next().value;
+          this.snapshotCache.delete(firstKey);
+        }
+        return data.snapshot;
+      }
+    } catch (err) {
+      console.error(`Error loading snapshot ${snapshotId}:`, err);
+    }
+    return null;
+  }
+
+  clusterNodes(nodes) {
+    if (!nodes || nodes.length === 0) {
+      return { centroids: [], assignments: [], clusterStats: [] };
+    }
+    const kmeans = new KMeans({
+      k: this.k,
+      maxIterations: 50,
+      tolerance: 1e-4,
+    });
+    return kmeans.fit(nodes);
+  }
+
+  async scrubToHistory(index) {
+    if (!this.sqliteSnapshots || this.sqliteSnapshots.length === 0) return;
+    if (index < 0 || index >= this.sqliteSnapshots.length) return;
 
     this.historyIndex = index;
-    const snap = this.historySnapshots[index];
+    const metaSnap = this.sqliteSnapshots[index];
 
     if (this.btnTimelineLive) {
       this.btnTimelineLive.classList.remove('live-active');
     }
     if (this.timelineStatusText) {
-      this.timelineStatusText.innerHTML = `<span style="color:#f59e0b;font-weight:700;">⏮ REPLAYING [${index + 1}/${this.historySnapshots.length}] ${snap.timeStr}</span>`;
+      this.timelineStatusText.innerHTML = `<span style="color:#f59e0b;font-weight:700;">⏮ REPLAYING SQLite #${metaSnap.id} [${index + 1}/${this.sqliteSnapshots.length}] ${metaSnap.time_str} • ${metaSnap.total_nodes} nodes, ${metaSnap.total_connections} flows</span>`;
     }
     if (this.timelineSlider) {
       this.timelineSlider.value = index;
     }
+    if (this.timelineCountText) {
+      this.timelineCountText.textContent = `Snapshot ${index + 1} of ${this.sqliteSnapshots.length}`;
+    }
 
-    this.renderHistorySnapshot(index);
+    await this.renderHistoricalSnapshot(metaSnap, index);
+  }
+
+  async renderHistoricalSnapshot(metaSnap, targetIndex) {
+    const fullSnap = await this.fetchSnapshotTopology(metaSnap.id);
+    if (!fullSnap || this.historyIndex !== targetIndex) return;
+
+    const topology = fullSnap.topology || fullSnap;
+    if (!topology || !topology.nodes) return;
+
+    this.currentTopology = topology;
+    this.rawSockets = topology.sockets || [];
+
+    // Recompute K-Means clustering for this snapshot
+    const kmeansResult = this.clusterNodes(topology.nodes);
+    this.currentKMeansResult = kmeansResult;
+
+    const { nodes, connections } = topology;
+
+    this.chart.updateData({
+      nodes,
+      connections,
+      centroids: kmeansResult.centroids,
+      assignments: kmeansResult.assignments,
+      clusterStats: kmeansResult.clusterStats,
+    });
+    this.chart.render();
+
+    this.updateTelemetryUI(kmeansResult, nodes, connections);
+    this.updateGatewayTable(kmeansResult, nodes, connections);
+    this.updatePortDistributionUI();
+    this.checkThresholdAlerts(topology);
+
+    if (this.inspectorDrawer?.classList.contains('open')) {
+      this.renderSocketInspector();
+    }
   }
 
   stepTimeline(delta) {
-    if (this.historySnapshots.length === 0) return;
+    if (!this.sqliteSnapshots || this.sqliteSnapshots.length === 0) return;
 
     if (this.historyIndex === -1) {
       // Currently live, step back into recent history
       if (delta < 0) {
-        const target = Math.max(0, this.historySnapshots.length - 2);
+        const target = Math.max(0, this.sqliteSnapshots.length - 2);
         this.scrubToHistory(target);
       }
     } else {
       const nextIdx = this.historyIndex + delta;
-      if (nextIdx >= this.historySnapshots.length) {
+      if (nextIdx >= this.sqliteSnapshots.length) {
         this.snapToLive();
       } else if (nextIdx >= 0) {
         this.scrubToHistory(nextIdx);
@@ -1279,7 +1501,11 @@ class NetworkClusterApp {
       this.timelineStatusText.innerHTML = `● LIVE TELEMETRY STREAM`;
     }
     if (this.timelineSlider) {
-      this.timelineSlider.value = Math.max(0, this.historySnapshots.length - 1);
+      this.timelineSlider.value = Math.max(0, this.sqliteSnapshots.length - 1);
+    }
+    if (this.timelineCountText) {
+      const count = this.sqliteSnapshots.length;
+      this.timelineCountText.textContent = `${count} snapshot${count === 1 ? '' : 's'} in window`;
     }
 
     // Refresh live & resume continuous stream
@@ -1301,8 +1527,8 @@ class NetworkClusterApp {
         this.timelinePlayText.textContent = 'Play Replay';
       }
     } else {
-      if (this.historySnapshots.length < 2) {
-        this.showToast('Timeline Playback', 'Wait for at least 2 telemetry snapshots to record.', 'info');
+      if (!this.sqliteSnapshots || this.sqliteSnapshots.length < 2) {
+        this.showToast('Timeline Playback', 'Wait for at least 2 SQLite snapshots to accumulate.', 'info');
         return;
       }
 
@@ -1314,7 +1540,7 @@ class NetworkClusterApp {
         this.timelinePlayText.textContent = 'Pause Replay';
       }
 
-      if (this.historyIndex === -1 || this.historyIndex >= this.historySnapshots.length - 1) {
+      if (this.historyIndex === -1 || this.historyIndex >= this.sqliteSnapshots.length - 1) {
         this.historyIndex = 0;
       }
       this.scrubToHistory(this.historyIndex);
@@ -1322,44 +1548,14 @@ class NetworkClusterApp {
       this.timelinePlayInterval = setInterval(() => {
         if (!this.isTimelinePlaying) return;
         const next = this.historyIndex + 1;
-        if (next >= this.historySnapshots.length) {
-          // Loop back to start or snap live
+        if (next >= this.sqliteSnapshots.length) {
+          // Loop back to start
           this.historyIndex = 0;
           this.scrubToHistory(0);
         } else {
           this.scrubToHistory(next);
         }
       }, 1500);
-    }
-  }
-
-  renderHistorySnapshot(idx) {
-    const snap = this.historySnapshots[idx];
-    if (!snap) return;
-
-    this.currentTopology = snap.topology;
-    this.currentKMeansResult = snap.kmeansResult;
-    this.rawSockets = snap.sockets;
-
-    const { nodes, connections } = snap.topology;
-    const result = snap.kmeansResult;
-
-    this.chart.updateData({
-      nodes,
-      connections,
-      centroids: result.centroids,
-      assignments: result.assignments,
-      clusterStats: result.clusterStats,
-    });
-    this.chart.render();
-
-    this.updateTelemetryUI(result, nodes, connections);
-    this.updateGatewayTable(result, nodes, connections);
-    this.updatePortDistributionUI();
-    this.checkThresholdAlerts(snap.topology);
-
-    if (this.inspectorDrawer?.classList.contains('open')) {
-      this.renderSocketInspector();
     }
   }
 
