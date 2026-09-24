@@ -174,17 +174,24 @@ export class NetworkClusterChart {
       const c = item.data;
       const stats = this.clusterStats[item.index] || {};
       const color = NetworkClusterChart.PALETTE[item.index % NetworkClusterChart.PALETTE.length];
-      const subnetPrefix = `Subnet Zone ${item.index + 1}`;
+      
+      // Determine dominant zone in this cluster
+      const memberNodes = this.nodes.filter((_, idx) => this.assignments[idx] === item.index);
+      const zones = memberNodes.map(n => n.zone).filter(Boolean);
+      const dominantZone = zones.length > 0 
+        ? zones.sort((a,b) => zones.filter(v => v===a).length - zones.filter(v => v===b).length).pop()
+        : `Subnet Zone ${item.index + 1}`;
 
       this.tooltip.innerHTML = `
         <div style="display:flex;align-items:center;gap:6px;font-weight:700;color:${color.main};margin-bottom:6px;">
           <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color.main}"></span>
-          Subnet Gateway μ${item.index + 1} (${subnetPrefix})
+          Subnet Gateway μ${item.index + 1}
         </div>
-        <div style="font-size:12px;color:#cbd5e1;line-height:1.6;">
+        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.6;">
+          <div>Zone: <b style="color:#f1f5f9;">${dominantZone}</b></div>
           <div>Gateway Nexus: <b>(${c.x.toFixed(2)}, ${c.y.toFixed(2)})</b></div>
-          <div>Active Hosts: <b>${stats.count || 0} IPs</b> (${(((stats.count || 0) / (this.nodes.length || 1)) * 100).toFixed(1)}%)</div>
-          <div>Cluster WCSS Spread: <b>${(stats.avgDistance || 0).toFixed(2)}</b></div>
+          <div>Member Hosts: <b>${stats.count || 0} IPs</b> (${(((stats.count || 0) / (this.nodes.length || 1)) * 100).toFixed(1)}%)</div>
+          <div>Cluster Dispersion: <b>${(stats.avgDistance || 0).toFixed(2)}</b></div>
         </div>
       `;
     } else if (item.type === 'node') {
@@ -196,31 +203,52 @@ export class NetworkClusterChart {
       const outConns = this.connections.filter(c => c.srcId === node.id);
       const inConns = this.connections.filter(c => c.destId === node.id);
 
+      const zoneBadge = node.zone 
+        ? `<span style="font-size:9.5px;padding:2px 6px;border-radius:4px;font-weight:700;background:${node.isInternal ? 'rgba(16,185,129,0.18);color:#34d399;border:1px solid rgba(16,185,129,0.3)' : 'rgba(6,182,212,0.18);color:#38bdf8;border:1px solid rgba(6,182,212,0.3)'}">${node.zone.toUpperCase()}</span>`
+        : '';
+
+      const processBadge = node.process
+        ? `<div style="margin-top:4px;display:flex;align-items:center;gap:4px;font-size:11px;color:#a78bfa;">
+             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1"/><circle cx="15" cy="15" r="1"/></svg>
+             <span>Process: <b>${node.process}</b></span>
+           </div>`
+        : '';
+
       const outSummary = outConns.length > 0
-        ? outConns.slice(0, 3).map(c => `
-            <div style="display:flex;align-items:center;gap:4px;font-family:monospace;font-size:11px;">
-              <span style="color:#64748b;">↳</span>
-              <span>${c.destIP}</span>
-              <span style="background:${c.color}22;color:${c.color};padding:1px 4px;border-radius:3px;font-weight:700;">:${c.destPort} [${c.service}]</span>
+        ? outConns.slice(0, 4).map(c => `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-family:monospace;font-size:10.5px;margin-top:2px;">
+              <span style="color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;">↳ ${c.destIP}</span>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <span style="background:${c.color}22;color:${c.color};padding:1px 4px;border-radius:3px;font-weight:700;">:${c.destPort}</span>
+                <span style="color:#64748b;font-size:9.5px;">${c.latencyMs ? c.latencyMs + 'ms' : ''}</span>
+              </div>
             </div>
           `).join('')
         : '<div style="color:#64748b;font-size:11px;">No outbound sockets</div>';
 
       this.tooltip.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:4px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:5px;gap:8px;">
           <div style="font-weight:700;color:${color.main};font-family:monospace;font-size:13px;">
             ${node.ip}
           </div>
-          <span style="font-size:10px;background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;color:#94a3b8;">
-            ${node.hostname}
-          </span>
+          ${zoneBadge}
         </div>
         <div style="font-size:11.5px;color:#cbd5e1;line-height:1.5;">
-          <div>Subnet Zone: <b style="color:${color.main}">Cluster ${clusterIdx + 1}</b></div>
-          <div>Coordinates: <b>(${node.x.toFixed(1)}, ${node.y.toFixed(1)})</b></div>
-          <div>Traffic Throughput: <b>${node.trafficMbps} Mbps</b></div>
-          <div style="margin-top:6px;font-weight:600;color:#94a3b8;font-size:11px;">
-            Outbound Sockets (${outConns.length}) / Inbound (${inConns.length}):
+          <div style="display:flex;justify-content:space-between;">
+            <span style="color:#94a3b8;">Host / Domain:</span>
+            <b style="color:#f1f5f9;font-family:monospace;font-size:11px;">${node.hostname || node.ip}</b>
+          </div>
+          ${processBadge}
+          <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span style="color:#94a3b8;">Cluster Centroid:</span>
+            <b style="color:${color.main}">Subnet Gateway μ${clusterIdx + 1}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span style="color:#94a3b8;">Throughput:</span>
+            <b style="color:#38bdf8">${node.trafficMbps} Mbps</b>
+          </div>
+          <div style="margin-top:6px;font-weight:600;color:#94a3b8;font-size:11px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:4px;">
+            Active Sockets: Outbound (${outConns.length}) • Inbound (${inConns.length})
           </div>
           ${outSummary}
         </div>
@@ -536,10 +564,13 @@ export class NetworkClusterChart {
 
       // Optional IP Host Labels
       if (this.options.showIpLabels || isHovered) {
-        ctx.font = '9px JetBrains Mono, monospace';
-        ctx.fillStyle = isHovered ? '#ffffff' : 'rgba(203, 213, 225, 0.7)';
+        ctx.font = isHovered ? 'bold 10px JetBrains Mono, monospace' : '9px JetBrains Mono, monospace';
+        ctx.fillStyle = isHovered ? '#ffffff' : 'rgba(203, 213, 225, 0.75)';
         ctx.textAlign = 'center';
-        ctx.fillText(node.ip, pos.x, pos.y - radius - 4);
+        const label = isHovered && node.hostname && node.hostname !== node.ip
+          ? `${node.hostname} (${node.ip})`
+          : node.ip;
+        ctx.fillText(label, pos.x, pos.y - radius - 4);
       }
     }
   }
