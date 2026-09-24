@@ -104,16 +104,19 @@
         <span class="panel-badge">Config</span>
       </div>
 
-      <!-- Data Source Switcher -->
-      <div class="control-group" style="background: rgba(6, 182, 212, 0.06); border: 1px solid rgba(6, 182, 212, 0.2); border-radius: 8px; padding: 0.65rem;">
-        <div class="control-label-row">
-          <label for="dataSourceSelect" style="color: var(--accent-cyan); font-weight: 700;">Telemetry Source</label>
-          <span class="source-live-tag" id="sourceBadge">LIVE SYSTEM</span>
+      <!-- Telemetry Source Indicator -->
+      <div class="control-group" style="background: rgba(6, 182, 212, 0.06); border: 1px solid rgba(6, 182, 212, 0.22); border-radius: 8px; padding: 0.65rem 0.8rem;">
+        <div class="control-label-row" style="margin-bottom: 0.3rem;">
+          <span style="color: var(--accent-cyan); font-weight: 700; font-size: 0.76rem; letter-spacing: 0.04em;">TELEMETRY SOURCE</span>
+          <span class="source-live-tag" id="sourceBadge">LIVE HOST &amp; LAN</span>
         </div>
-        <select id="dataSourceSelect" class="styled-select source-select" style="margin-top: 0.35rem;">
-          <option value="real" selected>🟢 Live Real Network (Host & LAN)</option>
-          <option value="simulated">⚡ Simulated Benchmark Topology</option>
-        </select>
+        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.78rem; color: #f1f5f9;">
+          <span style="display: flex; align-items: center; gap: 6px;">
+            <span style="width: 7px; height: 7px; border-radius: 50%; background: #10b981; box-shadow: 0 0 6px #10b981;"></span>
+            Real Linux Telemetry
+          </span>
+          <span style="font-size: 0.7rem; color: #94a3b8; font-family: 'JetBrains Mono', monospace;">Live /proc/net</span>
+        </div>
       </div>
 
       <!-- Traffic Scope Filter -->
@@ -171,26 +174,6 @@
           <span class="control-value-badge" id="kValueBadge">4</span>
         </div>
         <input type="range" id="kSlider" min="2" max="8" value="4" step="1">
-      </div>
-
-      <!-- IP Nodes Count Slider (visible in simulated mode or informative) -->
-      <div class="control-group" id="nodeCountControlGroup">
-        <div class="control-label-row">
-          <label for="pointSlider">IP Host Nodes (N)</label>
-          <span class="control-value-badge" id="pointValueBadge">Live</span>
-        </div>
-        <input type="range" id="pointSlider" min="20" max="300" value="140" step="10">
-      </div>
-
-      <!-- Topology Distribution (used in simulated mode) -->
-      <div class="control-group" id="distControlGroup">
-        <div class="control-label-row">
-          <label for="distSelect">Simulated Topology Mode</label>
-        </div>
-        <select id="distSelect" class="styled-select">
-          <option value="blobs" selected>Subnet Enclaves (Gaussian Blobs)</option>
-          <option value="uniform">Distributed Mesh (Uniform Noise)</option>
-        </select>
       </div>
 
 

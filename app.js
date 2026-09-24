@@ -1,5 +1,5 @@
 import { KMeans } from './kmeans.js';
-import { NetworkDataGenerator, WELL_KNOWN_PORTS } from './generator.js';
+import { WELL_KNOWN_PORTS } from './generator.js';
 import { NetworkClusterChart } from './chart.js';
 
 class NetworkClusterApp {
@@ -9,7 +9,6 @@ class NetworkClusterApp {
     this.tooltip = document.getElementById('chartTooltip');
 
     // Controls
-    this.dataSourceSelect = document.getElementById('dataSourceSelect');
     this.trafficScopeSelect = document.getElementById('trafficScopeSelect');
     this.scopeCounter = document.getElementById('scopeCounter');
     this.sourceBadge = document.getElementById('sourceBadge');
@@ -17,17 +16,11 @@ class NetworkClusterApp {
 
     this.kSlider = document.getElementById('kSlider');
     this.kValueBadge = document.getElementById('kValueBadge');
-    this.pointSlider = document.getElementById('pointSlider');
-    this.pointValueBadge = document.getElementById('pointValueBadge');
-    this.distSelect = document.getElementById('distSelect');
     this.portFilterSelect = document.getElementById('portFilterSelect');
     this.streamStatusBar = document.getElementById('streamStatusBar');
     this.streamFpsBadge = document.getElementById('streamFpsBadge');
     this.streamVisualizer = document.getElementById('streamVisualizer');
     this.toggleOrganicDrift = document.getElementById('toggleOrganicDrift');
-
-    this.nodeCountControlGroup = document.getElementById('nodeCountControlGroup');
-    this.distControlGroup = document.getElementById('distControlGroup');
 
     // Action Buttons
     this.btnPlayPause = document.getElementById('btnPlayPause');
@@ -115,7 +108,6 @@ class NetworkClusterApp {
     this.historyList = document.getElementById('historyList');
 
     // State
-    this.dataSource = this.dataSourceSelect ? this.dataSourceSelect.value : 'real';
     this.trafficScope = this.trafficScopeSelect ? this.trafficScopeSelect.value : 'all';
     this.resolveDns = this.toggleDnsLookup ? this.toggleDnsLookup.checked : false;
     this.resolveGeoip = this.toggleGeoip ? this.toggleGeoip.checked : true;
@@ -132,8 +124,6 @@ class NetworkClusterApp {
     this.timelinePlayInterval = null;
 
     this.k = parseInt(this.kSlider.value, 10) || 4;
-    this.nodeCount = parseInt(this.pointSlider.value, 10) || 140;
-    this.distribution = this.distSelect ? this.distSelect.value : 'blobs';
 
     this.isPlaying = true;
     this.streamPollIntervalMs = 1200;
@@ -213,30 +203,6 @@ class NetworkClusterApp {
   }
 
   attachEventListeners() {
-    // Data Source Toggle
-    if (this.dataSourceSelect) {
-      this.dataSourceSelect.addEventListener('change', (e) => {
-        this.dataSource = e.target.value;
-        const isReal = this.dataSource === 'real';
-
-        if (this.sourceBadge) {
-          this.sourceBadge.textContent = isReal ? 'LIVE SYSTEM' : 'BENCHMARK';
-          this.sourceBadge.style.color = isReal ? 'var(--accent-cyan)' : 'var(--accent-amber)';
-        }
-
-        if (this.nodeCountControlGroup) {
-          this.nodeCountControlGroup.style.opacity = isReal ? '0.5' : '1.0';
-          this.pointValueBadge.textContent = isReal ? 'Auto' : this.nodeCount;
-        }
-
-        if (this.distControlGroup) {
-          this.distControlGroup.style.opacity = isReal ? '0.5' : '1.0';
-        }
-
-        this.generateAndCluster();
-      });
-    }
-
     // Traffic Scope Selector
     if (this.trafficScopeSelect) {
       this.trafficScopeSelect.addEventListener('change', (e) => {
@@ -277,28 +243,12 @@ class NetworkClusterApp {
       this.reclusterTopology();
     });
 
-    // IP Nodes Count Slider
-    this.pointSlider.addEventListener('input', (e) => {
-      this.nodeCount = parseInt(e.target.value, 10);
-      if (this.dataSource === 'simulated') {
-        this.pointValueBadge.textContent = this.nodeCount;
-      }
-    });
-
     // Organic Micro-Motion Toggle
     if (this.toggleOrganicDrift) {
       this.toggleOrganicDrift.addEventListener('change', (e) => {
         this.chart.options.organicDrift = e.target.checked;
       });
     }
-
-    // Topology Distribution
-    this.distSelect.addEventListener('change', (e) => {
-      this.distribution = e.target.value;
-      if (this.dataSource === 'simulated') {
-        this.generateAndCluster();
-      }
-    });
 
     // Port Filter
     this.portFilterSelect.addEventListener('change', (e) => {
@@ -460,7 +410,7 @@ class NetworkClusterApp {
     if (this.isPlaying) {
       this.liveIndicator?.classList.remove('paused');
       this.streamStatusBar?.classList.remove('paused');
-      this.liveStatusText.textContent = this.dataSource === 'real' ? 'LIVE CONTINUOUS STREAM' : 'SIMULATED STREAM';
+      this.liveStatusText.textContent = 'LIVE CONTINUOUS STREAM';
       this.btnPlayPauseText.textContent = 'Pause';
       this.btnPlayPauseIcon.innerHTML = `
         <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
@@ -517,103 +467,36 @@ class NetworkClusterApp {
   }
 
   /**
-   * Acquire network topology (Real Linux Telemetry or Simulated) and run K-Means
+   * Acquire live Linux network telemetry and run K-Means clustering
    */
   async generateAndCluster() {
     // If replaying historical snapshot, don't overwrite with live fetch unless forced
     if (this.historyIndex >= 0) return;
 
-    if (this.dataSource === 'real') {
-      const realData = await this.fetchRealNetworkData();
-      if (realData && realData.nodes && realData.nodes.length > 0) {
-        this.currentTopology = realData;
-        this.rawSockets = realData.sockets || [];
-        this.chart.options.resolveDns = this.resolveDns;
-        this.chart.options.showGeoip = this.resolveGeoip;
-        this.updateRealHostUI(realData.meta);
-        this.populatePortDropdown(realData.connections);
-        this.reclusterTopology();
-        this.checkThresholdAlerts(realData);
+    const realData = await this.fetchRealNetworkData();
+    if (realData && realData.nodes && realData.nodes.length > 0) {
+      this.currentTopology = realData;
+      this.rawSockets = realData.sockets || [];
+      this.chart.options.resolveDns = this.resolveDns;
+      this.chart.options.showGeoip = this.resolveGeoip;
+      this.updateRealHostUI(realData.meta);
+      this.populatePortDropdown(realData.connections);
+      this.reclusterTopology();
+      this.checkThresholdAlerts(realData);
 
-        const now = Date.now();
-        if (!this.lastSnapshotRecordTime || now - this.lastSnapshotRecordTime >= 4000) {
-          this.lastSnapshotRecordTime = now;
-          this.recordSnapshot(realData, this.currentKMeansResult);
-        }
-        if (this.inspectorDrawer?.classList.contains('open')) {
-          this.renderSocketInspector();
-        }
-        if (!this.lastHistoryLogTime || now - this.lastHistoryLogTime >= 8000) {
-          this.lastHistoryLogTime = now;
-          this.addToHistory(true);
-        }
-        return;
+      const now = Date.now();
+      if (!this.lastSnapshotRecordTime || now - this.lastSnapshotRecordTime >= 4000) {
+        this.lastSnapshotRecordTime = now;
+        this.recordSnapshot(realData, this.currentKMeansResult);
+      }
+      if (this.inspectorDrawer?.classList.contains('open')) {
+        this.renderSocketInspector();
+      }
+      if (!this.lastHistoryLogTime || now - this.lastHistoryLogTime >= 8000) {
+        this.lastHistoryLogTime = now;
+        this.addToHistory();
       }
     }
-
-    // Simulated benchmark mode: evolve existing topology smoothly
-    if (this.currentTopology && this.currentTopology.nodes && this.currentTopology.nodes.length > 0) {
-      this.currentTopology = NetworkDataGenerator.evolveTopology(this.currentTopology, {
-        nodeCount: this.nodeCount,
-        numSubnets: this.k,
-        connectionDensity: 1.4,
-        distribution: this.distribution,
-      });
-    } else {
-      this.currentTopology = NetworkDataGenerator.generateTopology({
-        nodeCount: this.nodeCount,
-        numSubnets: this.k,
-        connectionDensity: 1.4,
-        distribution: this.distribution,
-      });
-    }
-    this.rawSockets = this.generateSimulatedSockets(this.currentTopology);
-
-    this.updateSimulatedHostUI();
-    this.populatePortDropdown(this.currentTopology.connections);
-    this.reclusterTopology();
-    this.checkThresholdAlerts(this.currentTopology);
-
-    const now = Date.now();
-    if (!this.lastSnapshotRecordTime || now - this.lastSnapshotRecordTime >= 4000) {
-      this.lastSnapshotRecordTime = now;
-      this.recordSnapshot(this.currentTopology, this.currentKMeansResult);
-    }
-    if (this.inspectorDrawer?.classList.contains('open')) {
-      this.renderSocketInspector();
-    }
-    if (!this.lastHistoryLogTime || now - this.lastHistoryLogTime >= 8000) {
-      this.lastHistoryLogTime = now;
-      this.addToHistory(false);
-    }
-  }
-
-  generateSimulatedSockets(topo) {
-    const list = [];
-    topo.connections.forEach(c => {
-      list.push({
-        proto: c.proto || 'TCP',
-        state: 'ESTAB',
-        localIP: c.srcIP,
-        localPort: 48000 + (c.id % 12000),
-        peerIP: c.destIP,
-        peerPort: c.destPort,
-        process: c.process || 'app',
-        pid: 1000 + (c.id % 2000),
-        service: c.service,
-        serviceColor: c.color,
-        rttMs: c.latencyMs,
-        rttvarMs: 1.2,
-        cwnd: 10,
-        recvQ: 0,
-        sendQ: 0,
-        bytesSent: Math.floor(c.throughputKbps * 128),
-        bytesRecv: Math.floor(c.throughputKbps * 512),
-        deliveryRate: `${(c.throughputKbps / 8).toFixed(1)}KB/s`,
-        sendRate: `${c.throughputKbps}Kbps`
-      });
-    });
-    return list;
   }
 
   updateRealHostUI(meta) {
@@ -663,22 +546,6 @@ class NetworkClusterApp {
       } else {
         this.processChipsContainer.innerHTML = '<span style="font-size:0.68rem;color:#64748b;">Idle / No active named processes</span>';
       }
-    }
-  }
-
-  updateSimulatedHostUI() {
-    if (this.hostInterfaceName) this.hostInterfaceName.textContent = 'sim0 (Virtual)';
-    if (this.hostLocalIP) this.hostLocalIP.textContent = '10.0.1.25';
-    if (this.hostGatewayIP) this.hostGatewayIP.textContent = '10.0.1.1';
-    if (this.hostBandwidthRate) this.hostBandwidthRate.textContent = 'Simulated Stream';
-    if (this.pillInternalVal) this.pillInternalVal.textContent = 'Benchmark Host Nodes';
-    if (this.pillPublicVal) this.pillPublicVal.textContent = 'Synthetic Sockets';
-    if (this.telemetryStatusBadge) {
-      this.telemetryStatusBadge.textContent = 'SYNTHETIC';
-      this.telemetryStatusBadge.style.color = 'var(--accent-amber)';
-    }
-    if (this.processChipsContainer) {
-      this.processChipsContainer.innerHTML = '<span style="font-size:0.68rem;color:#64748b;">Synthetic traffic generator active</span>';
     }
   }
 
