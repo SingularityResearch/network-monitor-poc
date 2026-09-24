@@ -202,79 +202,80 @@ class RealNetworkCollector:
         except ValueError:
             pass
 
-        hostname = clean_ip
-        zone = "Public Internet"
-        org = "Internet"
-        subnet_category = 2
+        # 1. Standard IP classification using Python ipaddress module
+        try:
+            ip_obj = ipaddress.ip_address(clean_ip)
+            is_loopback = ip_obj.is_loopback
+            is_private = ip_obj.is_private
+            is_link_local = ip_obj.is_link_local
+            is_multicast = ip_obj.is_multicast
+            is_global = ip_obj.is_global
+        except ValueError:
+            ip_obj = None
+            is_loopback = clean_ip in ('127.0.0.1', '::1')
+            is_private = clean_ip.startswith(('192.168.', '10.', '172.'))
+            is_link_local = False
+            is_multicast = False
+            is_global = not is_loopback and not is_private
 
-        if clean_ip == '127.0.0.1' or is_loopback:
+        # 2. Check local subnet CIDR
+        local_net = None
+        try:
+            local_net = ipaddress.ip_network(routes.get('subnet_cidr', '192.168.0.0/24'), strict=False)
+        except Exception:
+            pass
+
+        is_internal = is_loopback or is_private or is_link_local
+        
+        # 3. Categorize zone and subnet without guessing
+        if is_loopback:
             hostname = 'localhost'
             zone = 'Loopback IPC'
             org = 'Local Machine'
             subnet_category = 1
-        elif clean_ip == routes['default_gw']:
-            hostname = 'Default Gateway (Router)'
+            prefix = '127.0.0.0/8' if (ip_obj and ip_obj.version == 4) else '::1/128'
+        elif clean_ip == routes.get('default_gw'):
+            hostname = 'Default Gateway'
             zone = 'Internal LAN'
-            org = 'Home/Office Router'
+            org = 'Gateway/Router'
             subnet_category = 0
-        elif clean_ip == routes['local_ip']:
-            hostname = f"Host ({routes['iface']})"
+            prefix = str(local_net) if local_net else 'LAN'
+        elif clean_ip == routes.get('local_ip'):
+            try:
+                hostname = socket.gethostname()
+            except Exception:
+                hostname = f"Host ({routes.get('iface', 'eth0')})"
             zone = 'Internal LAN'
             org = 'This Host'
             subnet_category = 0
-        elif is_private or clean_ip.startswith('192.168.') or clean_ip.startswith('10.') or clean_ip.startswith('172.17.'):
+            prefix = str(local_net) if local_net else 'LAN'
+        elif is_private or (local_net and ip_obj and ip_obj in local_net):
             zone = 'Internal LAN'
-            org = 'LAN Device'
+            org = 'LAN Host'
             subnet_category = 0
-            # Try reverse DNS for LAN
+            prefix = str(local_net) if local_net else '192.168.0.0/24'
             try:
                 name = socket.gethostbyaddr(clean_ip)[0]
-                hostname = name.split('.')[0]
+                hostname = name.split('.')[0] if name else clean_ip
             except Exception:
-                hostname = f"lan-{clean_ip.split('.')[-1]}"
-        elif clean_ip.startswith('140.82.') or clean_ip.startswith('192.30.252.'):
-            hostname = 'github.com'
-            zone = 'Public Web & APIs'
-            org = 'GitHub'
-            subnet_category = 3
-        elif clean_ip.startswith('185.199.'):
-            hostname = 'github.io (Pages)'
-            zone = 'Public Web & APIs'
-            org = 'GitHub CDN'
-            subnet_category = 3
-        elif clean_ip.startswith('142.250.') or clean_ip.startswith('142.251.') or clean_ip.startswith('172.217.'):
-            hostname = 'google.com (Search/APIs)'
-            zone = 'Public Cloud'
-            org = 'Google'
-            subnet_category = 2
-        elif clean_ip.startswith('34.') or clean_ip.startswith('35.'):
-            hostname = 'google-cloud.com'
-            zone = 'Public Cloud'
-            org = 'Google Cloud Platform'
-            subnet_category = 2
-        elif clean_ip.startswith('151.101.') or clean_ip.startswith('199.232.'):
-            hostname = 'fastly-cdn.net'
-            zone = 'Public Web & APIs'
-            org = 'Fastly CDN'
-            subnet_category = 3
-        elif clean_ip.startswith('104.') or clean_ip.startswith('172.64.') or clean_ip.startswith('162.158.'):
-            hostname = 'cloudflare.com'
-            zone = 'Public Web & APIs'
-            org = 'Cloudflare'
-            subnet_category = 3
-        elif clean_ip.startswith('4.') or clean_ip.startswith('20.') or clean_ip.startswith('52.'):
-            hostname = 'azure.com'
-            zone = 'Public Cloud'
-            org = 'Microsoft Azure'
-            subnet_category = 2
+                hostname = clean_ip
         else:
-            # Fast reverse lookup
+            # Public Internet IP - genuine PTR query only (NO speculative company guessing)
+            zone = 'Public Internet'
+            subnet_category = 2
+            prefix = str(ipaddress.ip_network(f"{clean_ip}/16", strict=False)) if (ip_obj and ip_obj.version == 4) else 'Public'
+            
             try:
-                name = socket.getnameinfo((clean_ip, 0), socket.NI_NAMEREQD)[0]
-                parts = name.split('.')
-                hostname = '.'.join(parts[-2:]) if len(parts) >= 2 else name
-                org = parts[-2].capitalize() if len(parts) >= 2 else 'Internet'
+                ptr_name = socket.gethostbyaddr(clean_ip)[0]
+                if ptr_name:
+                    hostname = ptr_name.rstrip('.')
+                    parts = hostname.split('.')
+                    org = '.'.join(parts[-2:]) if len(parts) >= 2 else ptr_name
+                else:
+                    hostname = clean_ip
+                    org = 'Public Host'
             except Exception:
+                # No PTR record found in DNS - keep exact IP, do NOT guess
                 hostname = clean_ip
                 org = 'Public Host'
 
@@ -283,8 +284,9 @@ class RealNetworkCollector:
             'hostname': hostname,
             'zone': zone,
             'org': org,
-            'is_internal': is_loopback or is_private,
-            'subnet_category': subnet_category
+            'is_internal': is_internal,
+            'subnet_category': subnet_category,
+            'prefix': prefix
         }
         self.dns_cache[clean_ip] = res
         return res
@@ -430,15 +432,12 @@ class RealNetworkCollector:
             filtered_ips.append(ip)
 
         # Coordinate Anchor Centers for 4 Natural Topologic Subnets:
-        # Zone 0: Internal LAN (Top-Left / (25, 28))
-        # Zone 1: Loopback IPC (Bottom-Left / (25, 75))
-        # Zone 2: Public Cloud (Bottom-Right / (75, 75))
-        # Zone 3: Public CDNs & APIs (Top-Right / (75, 28))
+        lan_subnet_name = f"Internal LAN ({routes.get('subnet_cidr', '192.168.0.0/24')})"
         ZONE_CENTERS = [
-            {'x': 25.0, 'y': 28.0, 'name': 'Internal LAN (192.168.0.*)'},
-            {'x': 25.0, 'y': 75.0, 'name': 'Loopback IPC (127.0.0.*)'},
-            {'x': 75.0, 'y': 75.0, 'name': 'Public Cloud (Google / Azure / AWS)'},
-            {'x': 75.0, 'y': 28.0, 'name': 'Public Web & CDNs (GitHub / Fastly)'},
+            {'x': 25.0, 'y': 28.0, 'name': lan_subnet_name},
+            {'x': 25.0, 'y': 75.0, 'name': 'Loopback IPC (127.0.0.1)'},
+            {'x': 75.0, 'y': 75.0, 'name': 'Public Internet (Egress Sector A)'},
+            {'x': 75.0, 'y': 28.0, 'name': 'Public Internet (Egress Sector B)'},
         ]
 
         def hash_str(s: str) -> int:
