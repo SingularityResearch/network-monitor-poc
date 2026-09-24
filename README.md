@@ -1,6 +1,6 @@
 # K-Means Network IP & Port Connection Visualizer
 
-An interactive, modern Network Operations Center (NOC) web application monitoring **actual real-time network traffic from your Linux host** as well as simulated benchmark topologies.
+An interactive, modern Network Operations Center (NOC) web application monitoring **actual real-time network traffic from your Linux host and local network**.
 
 Every data point represents an IP address with **active socket connections to specific ports on other IP addresses**, clustered into **Subnet Zones** using K-Means centroids as **Virtual Gateways**.
 
@@ -58,9 +58,30 @@ In the dashboard controls, easily filter your view:
 
 ---
 
+## Interactive Canvas Zoom & Pan Navigation
+
+The visualizer includes smooth, hardware-accelerated zoom and pan navigation for exploring dense subnet clusters:
+
+- **Mouse Wheel Zoom**: Smooth cursor-anchored zooming (keeps the network topology under the cursor invariant).
+- **Drag to Pan**: Click and drag anywhere on the canvas to pan across the network space.
+- **Double-Click**: Quickly resets zoom and pan back to 100% overview (or double-clicks to zoom into a specific cluster).
+- **Floating Glassmorphic HUD Toolbar**:
+  - `[+]` Zoom In
+  - `[100%]` Dynamic zoom level badge (click to reset)
+  - `[-]` Zoom Out
+  - `[Reset]` Returns the canvas to default bounds
+- **Keyboard Shortcuts**:
+  - <kbd>+</kbd> or <kbd>=</kbd>: Zoom In
+  - <kbd>-</kbd> or <kbd>_</kbd>: Zoom Out
+  - <kbd>0</kbd> or <kbd>R</kbd>: Reset Zoom & Pan
+- **Adaptive Viewport**: Grid lines, coordinate tick markers, and dispersion halos automatically scale and re-subdivide cleanly across all zoom levels with strict viewport clipping.
+
+---
+
 ## Interactive Controls & Telemetry Dashboard
 
-- **Telemetry Source**: Switch anytime between **🟢 Live Real Network (Host & LAN)** and **⚡ Simulated Benchmark Topology**.
+- **Telemetry Source**: Live host network and LAN telemetry streamed directly from Linux kernel sockets and ARP neighbor tables.
+- **Subnet Gateways (Auto-Detected)**: Automatically determines the optimal number of gateways and cluster centroids ($K$) from active network zones (Internal LAN, Loopback IPC, Public Cloud/Internet egress).
 - **Traffic Scope**: Toggle between **All Traffic**, **Internal Only**, and **Public Only**.
 - **Filter by Port / Protocol**: Isolate specific ports (e.g. view only port 443, 22, 53, or dynamic IPC ports).
 - **Layer Toggles**:

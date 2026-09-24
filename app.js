@@ -14,8 +14,7 @@ class NetworkClusterApp {
     this.sourceBadge = document.getElementById('sourceBadge');
     this.btnScanLan = document.getElementById('btnScanLan');
 
-    this.kSlider = document.getElementById('kSlider');
-    this.kValueBadge = document.getElementById('kValueBadge');
+    this.autoKBadge = document.getElementById('autoKBadge');
     this.portFilterSelect = document.getElementById('portFilterSelect');
     this.streamStatusBar = document.getElementById('streamStatusBar');
     this.streamFpsBadge = document.getElementById('streamFpsBadge');
@@ -52,6 +51,12 @@ class NetworkClusterApp {
     this.toggleAlertOverlays = document.getElementById('toggleAlertOverlays');
     this.alertsActiveBadge = document.getElementById('alertsActiveBadge');
     this.toastContainer = document.getElementById('toastContainer');
+
+    // Canvas Zoom & Pan HUD Elements
+    this.btnZoomIn = document.getElementById('btnZoomIn');
+    this.btnZoomOut = document.getElementById('btnZoomOut');
+    this.btnZoomReset = document.getElementById('btnZoomReset');
+    this.zoomLevelText = document.getElementById('zoomLevelText');
 
     // Deep Socket Inspector Controls
     this.btnOpenInspector = document.getElementById('btnOpenInspector');
@@ -123,7 +128,7 @@ class NetworkClusterApp {
     this.isTimelinePlaying = false;
     this.timelinePlayInterval = null;
 
-    this.k = parseInt(this.kSlider.value, 10) || 4;
+    this.k = 4;
 
     this.isPlaying = true;
     this.streamPollIntervalMs = 1200;
@@ -153,12 +158,21 @@ class NetworkClusterApp {
       }
     };
 
+    // Reflect Canvas zoom level in HUD badge
+    this.chart.onZoomChange = (zoom) => {
+      if (this.zoomLevelText) {
+        this.zoomLevelText.textContent = `${Math.round(zoom * 100)}%`;
+      }
+    };
+
     // Connect Canvas item click to deep socket inspector
     this.chart.onItemClick = (item) => {
       if (item.type === 'node') {
         this.openSocketInspector('ip', item.data.ip);
       } else if (item.type === 'centroid') {
         this.openSocketInspector('cluster', item.index);
+      } else if (item.type === 'connection') {
+        this.openSocketInspector('flow', item.data);
       }
     };
 
@@ -236,13 +250,6 @@ class NetworkClusterApp {
       });
     }
 
-    // K-Means K Slider
-    this.kSlider.addEventListener('input', (e) => {
-      this.k = parseInt(e.target.value, 10);
-      this.kValueBadge.textContent = this.k;
-      this.reclusterTopology();
-    });
-
     // Organic Micro-Motion Toggle
     if (this.toggleOrganicDrift) {
       this.toggleOrganicDrift.addEventListener('change', (e) => {
@@ -255,6 +262,39 @@ class NetworkClusterApp {
       this.chart.options.filterPort = e.target.value;
       this.chart.render();
       this.updatePortDistributionUI();
+    });
+
+    // Zoom & Pan Toolbar Controls
+    if (this.btnZoomIn) {
+      this.btnZoomIn.addEventListener('click', () => this.chart.zoomIn());
+    }
+    if (this.btnZoomOut) {
+      this.btnZoomOut.addEventListener('click', () => this.chart.zoomOut());
+    }
+    if (this.btnZoomReset) {
+      this.btnZoomReset.addEventListener('click', () => this.chart.resetZoom());
+    }
+    if (this.zoomLevelText) {
+      this.zoomLevelText.addEventListener('click', () => this.chart.resetZoom());
+    }
+
+    // Keyboard Shortcuts for Zooming (+/- / 0 / r)
+    window.addEventListener('keydown', (e) => {
+      const activeTag = document.activeElement?.tagName?.toLowerCase();
+      if (activeTag === 'input' || activeTag === 'select' || activeTag === 'textarea') return;
+
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        this.chart.zoomIn();
+      } else if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        this.chart.zoomOut();
+      } else if (e.key === '0' || e.key.toLowerCase() === 'r') {
+        if (!e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          this.chart.resetZoom();
+        }
+      }
     });
 
     // Play / Pause
@@ -300,7 +340,17 @@ class NetworkClusterApp {
       this.toggleDnsLookup.addEventListener('change', (e) => {
         this.resolveDns = e.target.checked;
         this.chart.options.resolveDns = this.resolveDns;
+
+        // Automatically activate label display when Resolve DNS is enabled
+        if (this.resolveDns) {
+          if (this.toggleIpLabels && !this.toggleIpLabels.checked) {
+            this.toggleIpLabels.checked = true;
+          }
+          this.chart.options.showIpLabels = true;
+        }
+
         this.generateAndCluster();
+        this.chart.render();
       });
     }
 
@@ -550,9 +600,30 @@ class NetworkClusterApp {
   }
 
   reclusterTopology() {
-    if (!this.currentTopology) return;
+    if (!this.currentTopology || !this.currentTopology.nodes || this.currentTopology.nodes.length === 0) return;
 
     const { nodes, connections } = this.currentTopology;
+
+    // Automatically determine optimal K based on active network zones & CIDR subnets
+    const distinctSubnets = new Set();
+    nodes.forEach(n => {
+      const key = n.subnetIdx !== undefined ? n.subnetIdx : (n.zone || 'default');
+      distinctSubnets.add(key);
+    });
+
+    let autoK = distinctSubnets.size;
+    if (this.trafficScope === 'internal') {
+      autoK = Math.min(nodes.length, Math.max(1, autoK));
+    } else if (this.trafficScope === 'public') {
+      autoK = Math.min(nodes.length, Math.max(1, autoK));
+    } else {
+      autoK = Math.min(nodes.length, Math.max(2, autoK));
+    }
+    this.k = Math.max(1, Math.min(8, autoK));
+
+    if (this.autoKBadge) {
+      this.autoKBadge.textContent = `Auto (${this.k})`;
+    }
 
     // Run K-Means with previous centroids to stabilize cluster color identities
     const prevCentroids = this.currentKMeansResult ? this.currentKMeansResult.centroids : null;
@@ -617,10 +688,6 @@ class NetworkClusterApp {
 
     this.metricSilhouette.textContent = result.silhouette >= 0 ? `+${result.silhouette.toFixed(2)}` : result.silhouette.toFixed(2);
     this.metricInertia.textContent = Math.round(result.inertia).toLocaleString();
-
-    if (this.dataSource === 'real' && this.pointValueBadge) {
-      this.pointValueBadge.textContent = `${nodes.length} IPs`;
-    }
   }
 
   updateGatewayTable(result, nodes, connections) {
@@ -933,6 +1000,14 @@ class NetworkClusterApp {
       this.inspectorTitle.textContent = `Host Sockets: ${filterValue}`;
       this.inspectorSubtitle.textContent = `Kernel sockets communicating with IP host ${filterValue}`;
       if (this.btnFilterChartToSelection) this.btnFilterChartToSelection.style.display = 'none';
+    } else if (filterType === 'flow' || filterType === 'connection') {
+      const conn = filterValue;
+      this.inspectorTitle.textContent = `Flow: ${conn.srcIP} → ${conn.destIP}:${conn.destPort}`;
+      this.inspectorSubtitle.textContent = `Active ${conn.proto || 'TCP'} socket connection • Service :${conn.destPort} (${conn.service || 'Port'}) • Latency: ${conn.latencyMs} ms`;
+      if (this.btnFilterChartToSelection) {
+        this.btnFilterChartToSelection.style.display = 'inline-flex';
+        this.btnFilterChartToSelection.textContent = `Filter Canvas to :${conn.destPort}`;
+      }
     } else if (filterType === 'port') {
       this.inspectorTitle.textContent = `Port :${filterValue} Protocol Drill-Down`;
       this.inspectorSubtitle.textContent = `Detailed socket connections destined for port :${filterValue}`;
@@ -970,6 +1045,25 @@ class NetworkClusterApp {
     if (this.inspectorFilter.type === 'ip') {
       const targetIp = String(this.inspectorFilter.value);
       sockets = sockets.filter(s => s.localIP === targetIp || s.peerIP === targetIp);
+    } else if ((this.inspectorFilter.type === 'flow' || this.inspectorFilter.type === 'connection') && this.inspectorFilter.value) {
+      const conn = this.inspectorFilter.value;
+      const sPort = parseInt(conn.destPort, 10);
+      let matched = sockets.filter(s =>
+        ((s.localIP === conn.srcIP && s.peerIP === conn.destIP) || (s.localIP === conn.destIP && s.peerIP === conn.srcIP)) &&
+        (!sPort || s.peerPort === sPort || s.localPort === sPort)
+      );
+      if (matched.length === 0) {
+        matched = (this.rawSockets || []).filter(s =>
+          (s.peerIP === conn.destIP || s.localIP === conn.destIP || s.peerIP === conn.srcIP || s.localIP === conn.srcIP) &&
+          (!sPort || s.peerPort === sPort || s.localPort === sPort)
+        );
+      }
+      if (matched.length === 0) {
+        matched = (this.rawSockets || []).filter(s =>
+          s.peerIP === conn.destIP || s.localIP === conn.destIP || s.peerIP === conn.srcIP || s.localIP === conn.srcIP
+        );
+      }
+      sockets = matched.length > 0 ? matched : sockets;
     } else if (this.inspectorFilter.type === 'port') {
       const targetPort = parseInt(this.inspectorFilter.value, 10);
       sockets = sockets.filter(s => s.peerPort === targetPort || s.localPort === targetPort);
@@ -1269,7 +1363,7 @@ class NetworkClusterApp {
     }
   }
 
-  addToHistory(isReal = true) {
+  addToHistory() {
     if (!this.currentKMeansResult) return;
     const now = new Date();
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -1278,8 +1372,7 @@ class NetworkClusterApp {
       time: timeStr,
       ips: this.currentTopology.nodes.length,
       sockets: this.currentTopology.connections.length,
-      k: this.currentKMeansResult.k,
-      isReal
+      k: this.currentKMeansResult.k
     });
 
     if (this.runHistory.length > 5) this.runHistory.pop();
@@ -1289,12 +1382,11 @@ class NetworkClusterApp {
   renderHistory() {
     let html = '';
     this.runHistory.forEach(item => {
-      const tag = item.isReal ? '<span style="color:#34d399;font-size:0.65rem;margin-left:4px;">● REAL</span>' : '';
       html += `
         <div class="history-item">
           <div>
             <span class="history-time">${item.time}</span>
-            ${tag}
+            <span style="color:#34d399;font-size:0.65rem;margin-left:4px;">● LIVE</span>
             <span style="margin-left:6px;color:var(--text-secondary);font-size:0.7rem;">(K=${item.k} Gateways)</span>
           </div>
           <div class="history-val">

@@ -66,6 +66,22 @@ export class NetworkClusterChart {
     this.fps = 60;
     this.fpsTimer = 0;
 
+    // Interactive Zoom and Pan state
+    this.zoom = 1.0;
+    this.targetZoom = 1.0;
+    this.minZoom = 0.5;
+    this.maxZoom = 8.0;
+
+    this.pan = { x: 0, y: 0 };
+    this.targetPan = { x: 0, y: 0 };
+
+    this.isDragging = false;
+    this.dragStart = { x: 0, y: 0 };
+    this.panStart = { x: 0, y: 0 };
+    this.hasDragged = false;
+
+    this.onZoomChange = null;
+
     this.setupEvents();
     this.resize();
 
@@ -89,41 +105,185 @@ export class NetworkClusterChart {
   setupEvents() {
     window.addEventListener('resize', () => this.resize());
 
+    // Wheel Zoom anchored at mouse pointer
+    this.canvas.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        // Exponential zoom stepping: wheel up zooms in, wheel down zooms out
+        const factor = e.deltaY < 0 ? 1.15 : 0.87;
+        this.zoomAt(mouseX, mouseY, factor);
+      },
+      { passive: false }
+    );
+
+    // Mouse drag-to-pan handling
+    this.canvas.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return; // Primary left button only
+      this.isDragging = true;
+      this.hasDragged = false;
+      this.dragStart = { x: e.clientX, y: e.clientY };
+      this.panStart = { x: this.targetPan.x, y: this.targetPan.y };
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!this.isDragging) return;
+      const dx = e.clientX - this.dragStart.x;
+      const dy = e.clientY - this.dragStart.y;
+      if (Math.hypot(dx, dy) > 4) {
+        this.hasDragged = true;
+        this.canvas.style.cursor = 'grabbing';
+        this.targetPan.x = this.panStart.x + dx;
+        this.targetPan.y = this.panStart.y + dy;
+        this.pan.x = this.targetPan.x;
+        this.pan.y = this.targetPan.y;
+        this.clearHover();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (this.isDragging) {
+        this.isDragging = false;
+        this.canvas.style.cursor = this.hoveredItem ? 'pointer' : 'grab';
+      }
+    });
+
     this.canvas.addEventListener('mousemove', (e) => {
+      if (this.isDragging && this.hasDragged) return;
       const rect = this.canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
       this.handleHover(mouseX, mouseY, e.clientX, e.clientY);
+      this.canvas.style.cursor = this.hoveredItem ? 'pointer' : 'grab';
     });
 
     this.canvas.addEventListener('mouseleave', () => {
-      this.hoveredItem = null;
-      if (this.tooltip) {
-        this.tooltip.style.opacity = '0';
+      if (!this.isDragging) {
+        this.clearHover();
       }
     });
 
     this.canvas.addEventListener('click', (e) => {
+      if (this.hasDragged) {
+        this.hasDragged = false;
+        return;
+      }
       if (this.hoveredItem && this.onItemClick) {
         this.onItemClick(this.hoveredItem);
       }
     });
+
+    // Double-click resets zoom or zooms 2x into cursor
+    this.canvas.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (
+        Math.abs(this.targetZoom - 1.0) > 0.05 ||
+        Math.abs(this.targetPan.x) > 5 ||
+        Math.abs(this.targetPan.y) > 5
+      ) {
+        this.resetZoom();
+      } else {
+        const rect = this.canvas.getBoundingClientRect();
+        this.zoomAt(e.clientX - rect.left, e.clientY - rect.top, 2.0);
+      }
+    });
+  }
+
+  zoomAt(canvasX, canvasY, factor) {
+    const oldZoom = this.targetZoom;
+    const newZoom = Math.min(this.maxZoom, Math.max(this.minZoom, oldZoom * factor));
+    if (Math.abs(newZoom - oldZoom) < 0.0001) return;
+
+    const plotWidth = this.width - this.margin.left - this.margin.right;
+    const plotHeight = this.height - this.margin.top - this.margin.bottom;
+    const plotCenterX = this.margin.left + plotWidth / 2;
+    const plotCenterY = this.margin.top + plotHeight / 2;
+
+    // Anchor: Keep data coordinate under canvasX, canvasY invariant
+    const baseX0 = (canvasX - this.targetPan.x - plotCenterX) / oldZoom + plotCenterX;
+    const baseY0 = (canvasY - this.targetPan.y - plotCenterY) / oldZoom + plotCenterY;
+
+    const newPanX = canvasX - plotCenterX - (baseX0 - plotCenterX) * newZoom;
+    const newPanY = canvasY - plotCenterY - (baseY0 - plotCenterY) * newZoom;
+
+    this.targetZoom = newZoom;
+    this.targetPan.x = newPanX;
+    this.targetPan.y = newPanY;
+
+    if (this.onZoomChange) {
+      this.onZoomChange(this.targetZoom);
+    }
+  }
+
+  zoomIn() {
+    const plotWidth = this.width - this.margin.left - this.margin.right;
+    const plotHeight = this.height - this.margin.top - this.margin.bottom;
+    const centerX = this.margin.left + plotWidth / 2;
+    const centerY = this.margin.top + plotHeight / 2;
+    this.zoomAt(centerX, centerY, 1.3);
+  }
+
+  zoomOut() {
+    const plotWidth = this.width - this.margin.left - this.margin.right;
+    const plotHeight = this.height - this.margin.top - this.margin.bottom;
+    const centerX = this.margin.left + plotWidth / 2;
+    const centerY = this.margin.top + plotHeight / 2;
+    this.zoomAt(centerX, centerY, 1 / 1.3);
+  }
+
+  resetZoom() {
+    this.targetZoom = 1.0;
+    this.targetPan = { x: 0, y: 0 };
+    if (this.onZoomChange) {
+      this.onZoomChange(this.targetZoom);
+    }
   }
 
   toCanvasCoords(x, y) {
     const plotWidth = this.width - this.margin.left - this.margin.right;
     const plotHeight = this.height - this.margin.top - this.margin.bottom;
-    const px = this.margin.left + (x / 100) * plotWidth;
-    const py = this.margin.top + (1 - y / 100) * plotHeight;
+    const plotCenterX = this.margin.left + plotWidth / 2;
+    const plotCenterY = this.margin.top + plotHeight / 2;
+
+    const baseX = this.margin.left + (x / 100) * plotWidth;
+    const baseY = this.margin.top + (1 - y / 100) * plotHeight;
+
+    const px = plotCenterX + (baseX - plotCenterX) * this.zoom + this.pan.x;
+    const py = plotCenterY + (baseY - plotCenterY) * this.zoom + this.pan.y;
     return { x: px, y: py };
   }
 
   toDataCoords(px, py) {
     const plotWidth = this.width - this.margin.left - this.margin.right;
     const plotHeight = this.height - this.margin.top - this.margin.bottom;
-    const x = ((px - this.margin.left) / plotWidth) * 100;
-    const y = (1 - (py - this.margin.top) / plotHeight) * 100;
+    const plotCenterX = this.margin.left + plotWidth / 2;
+    const plotCenterY = this.margin.top + plotHeight / 2;
+
+    const baseX = (px - this.pan.x - plotCenterX) / this.zoom + plotCenterX;
+    const baseY = (py - this.pan.y - plotCenterY) / this.zoom + plotCenterY;
+
+    const x = ((baseX - this.margin.left) / plotWidth) * 100;
+    const y = (1 - (baseY - this.margin.top) / plotHeight) * 100;
     return { x, y };
+  }
+
+  /**
+   * Compute shortest perpendicular distance from point (px, py) to line segment (x1, y1)-(x2, y2)
+   */
+  distToSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const projX = x1 + t * dx;
+    const projY = y1 + t * dy;
+    return Math.hypot(px - projX, py - projY);
   }
 
   /**
@@ -330,6 +490,14 @@ export class NetworkClusterChart {
       const c = this.animatedCentroids[i];
       if (c.alpha < 0.2) continue;
       const p = this.toCanvasCoords(c.currentX, c.currentY);
+      if (
+        p.x < this.margin.left - 10 ||
+        p.x > this.width - this.margin.right + 10 ||
+        p.y < this.margin.top - 10 ||
+        p.y > this.height - this.margin.bottom + 10
+      ) {
+        continue;
+      }
       const d = Math.hypot(p.x - mouseX, p.y - mouseY);
       if (d < minCentroidDist) {
         minCentroidDist = d;
@@ -359,6 +527,15 @@ export class NetworkClusterChart {
       }
 
       const cp = this.toCanvasCoords(animNode.renderX, animNode.renderY);
+      if (
+        cp.x < this.margin.left - 8 ||
+        cp.x > this.width - this.margin.right + 8 ||
+        cp.y < this.margin.top - 8 ||
+        cp.y > this.height - this.margin.bottom + 8
+      ) {
+        idx++;
+        continue;
+      }
       const d = Math.hypot(cp.x - mouseX, cp.y - mouseY);
       if (d < minNodeDist) {
         minNodeDist = d;
@@ -377,9 +554,54 @@ export class NetworkClusterChart {
 
     if (nearestNode) {
       this.setHoveredItem(nearestNode, clientX, clientY);
-    } else {
-      this.clearHover();
+      return;
     }
+
+    // Check Animated IP-to-IP Socket Connection Lines (Network Flows)
+    if (this.options.showConnections) {
+      let nearestConn = null;
+      let minConnDist = 14; // Generous 14px hit detection band for effortless clicking
+      const filterPort = this.options.filterPort;
+
+      for (const [key, animConn] of this.animatedConnections.entries()) {
+        if (animConn.alpha < 0.08 || animConn.isDeparting) continue;
+        const conn = animConn.data;
+
+        // Respect active port filter
+        if (filterPort !== 'all' && String(conn.destPort) !== String(filterPort)) {
+          continue;
+        }
+
+        const srcNode = this.animatedNodes.get(animConn.srcKey);
+        const destNode = this.animatedNodes.get(animConn.destKey);
+        if (!srcNode || !destNode || srcNode.alpha < 0.05 || destNode.alpha < 0.05) continue;
+
+        const p1 = this.toCanvasCoords(srcNode.renderX, srcNode.renderY);
+        const p2 = this.toCanvasCoords(destNode.renderX, destNode.renderY);
+
+        const d = this.distToSegment(mouseX, mouseY, p1.x, p1.y, p2.x, p2.y);
+        if (d < minConnDist) {
+          minConnDist = d;
+          nearestConn = {
+            type: 'connection',
+            key,
+            data: conn,
+            animConn,
+            srcNode,
+            destNode,
+            p1,
+            p2,
+          };
+        }
+      }
+
+      if (nearestConn) {
+        this.setHoveredItem(nearestConn, clientX, clientY);
+        return;
+      }
+    }
+
+    this.clearHover();
   }
 
   setHoveredItem(item, clientX, clientY) {
@@ -478,7 +700,7 @@ export class NetworkClusterChart {
           : '<div style="color:#64748b;font-size:11px;">No outbound sockets</div>';
 
       let dnsHtml = '';
-      if (node.dnsEnabled) {
+      if (node.dnsEnabled || this.options.resolveDns) {
         if (node.dnsName) {
           dnsHtml = `
             <div style="display:flex;justify-content:space-between;margin-top:2px;gap:8px;">
@@ -565,6 +787,103 @@ export class NetworkClusterChart {
           </div>
         </div>
       `;
+    } else if (item.type === 'connection') {
+      const conn = item.data;
+      const srcNode = item.srcNode?.data || {};
+      const destNode = item.destNode?.data || {};
+      const color = conn.color || '#38bdf8';
+
+      const protoBadge = `<span style="font-size:9.5px;padding:2px 6px;border-radius:4px;font-weight:700;background:${color}22;color:${color};border:1px solid ${color}44;">${conn.proto || 'TCP'} :${conn.destPort} [${conn.service || 'PORT'}]</span>`;
+
+      const typeBadge = conn.isCrossSubnet
+        ? `<span style="font-size:9.5px;padding:2px 6px;border-radius:4px;font-weight:700;background:rgba(245,158,11,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.3)">CROSS-SUBNET</span>`
+        : conn.isInternal
+        ? `<span style="font-size:9.5px;padding:2px 6px;border-radius:4px;font-weight:700;background:rgba(16,185,129,0.18);color:#34d399;border:1px solid rgba(16,185,129,0.3)">INTERNAL LAN</span>`
+        : `<span style="font-size:9.5px;padding:2px 6px;border-radius:4px;font-weight:700;background:rgba(6,182,212,0.18);color:#38bdf8;border:1px solid rgba(6,182,212,0.3)">INTERNET EGRESS</span>`;
+
+      let latencyColor = '#34d399';
+      let latencyQuality = 'Ultra-Low Latency';
+      if (conn.latencyMs > 50) {
+        latencyColor = '#f59e0b';
+        latencyQuality = 'Latency Spike Alert';
+      } else if (conn.latencyMs > 20) {
+        latencyColor = '#38bdf8';
+        latencyQuality = 'Normal Network RTT';
+      }
+
+      let destGeoHtml = '';
+      if (destNode.geo && !destNode.isInternal) {
+        const flag = destNode.geo.flag || '🌐';
+        const loc = [destNode.geo.city, destNode.geo.country].filter(Boolean).join(', ');
+        const orgDesc = destNode.geo.org || destNode.geo.isp || '';
+        destGeoHtml = `
+          <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span style="color:#94a3b8;">Destination Geo:</span>
+            <span style="color:#f1f5f9;font-size:11px;">${flag} <b>${loc || 'Internet'}</b></span>
+          </div>
+          ${orgDesc ? `
+          <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span style="color:#94a3b8;">Provider / ASN:</span>
+            <span style="color:#c084fc;font-size:10.5px;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${orgDesc}">${orgDesc}</span>
+          </div>` : ''}
+        `;
+      }
+
+      const processHtml = conn.process
+        ? `
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;">
+            <span style="color:#94a3b8;">Process:</span>
+            <b style="color:#c084fc;font-family:monospace;font-size:11px;">${conn.process}${conn.pid ? ` (PID ${conn.pid})` : ''}</b>
+          </div>
+        `
+        : '';
+
+      const throughputStr =
+        conn.throughputKbps > 1000
+          ? `${(conn.throughputKbps / 1000).toFixed(2)} Mbps`
+          : `${conn.throughputKbps || 0} Kbps`;
+
+      this.tooltip.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:5px;gap:8px;">
+          <div style="font-weight:700;color:${color};font-family:monospace;font-size:12.5px;">
+            ⚡ Network Socket Flow
+          </div>
+          ${typeBadge}
+        </div>
+        <div style="font-size:11.5px;color:#cbd5e1;line-height:1.5;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="color:#94a3b8;">Protocol &amp; Port:</span>
+            ${protoBadge}
+          </div>
+          <div style="background:rgba(15,23,42,0.7);padding:5px 8px;border-radius:4px;border:1px solid rgba(255,255,255,0.06);margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span style="color:#64748b;font-size:10px;text-transform:uppercase;">Source Host</span>
+              <span style="font-family:monospace;color:#f8fafc;font-size:11px;">${conn.srcIP}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
+              <span style="color:#64748b;font-size:10px;text-transform:uppercase;">Destination</span>
+              <span style="font-family:monospace;color:${color};font-weight:700;font-size:11px;">${conn.destIP}:${conn.destPort}</span>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span style="color:#94a3b8;">Kernel RTT Latency:</span>
+            <b style="color:${latencyColor}">${conn.latencyMs} ms <span style="font-size:10px;font-weight:400;color:#94a3b8;">(${latencyQuality})</span></b>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span style="color:#94a3b8;">Flow Throughput:</span>
+            <b style="color:#38bdf8">${throughputStr}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:2px;">
+            <span style="color:#94a3b8;">Socket State:</span>
+            <b style="color:#10b981">${conn.state || 'ESTABLISHED'}</b>
+          </div>
+          ${processHtml}
+          ${destGeoHtml}
+          <div style="margin-top:8px;font-size:10.5px;color:#38bdf8;text-align:center;background:rgba(6,182,212,0.12);border:1px solid rgba(6,182,212,0.25);padding:4px;border-radius:4px;font-weight:600;">
+            🔍 Click flow line to inspect socket &amp; packet frames
+          </div>
+        </div>
+      `;
     }
 
     this.tooltip.style.opacity = '1';
@@ -598,6 +917,12 @@ export class NetworkClusterChart {
     // Frame-rate independent exponential smoothing
     const lerpSpeed = 1 - Math.exp(-dt * 6.5);
     const fadeSpeed = 1 - Math.exp(-dt * 9.0);
+    const zoomLerpSpeed = 1 - Math.exp(-dt * 14.0);
+
+    // Smooth lerp for zoom and pan
+    this.zoom += (this.targetZoom - this.zoom) * zoomLerpSpeed;
+    this.pan.x += (this.targetPan.x - this.pan.x) * zoomLerpSpeed;
+    this.pan.y += (this.targetPan.y - this.pan.y) * zoomLerpSpeed;
 
     // 1. Interpolate Centroids
     for (let i = 0; i < this.animatedCentroids.length; i++) {
@@ -652,11 +977,20 @@ export class NetworkClusterChart {
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
+    const m = this.margin;
+    const plotW = w - m.left - m.right;
+    const plotH = h - m.top - m.bottom;
 
     ctx.clearRect(0, 0, w, h);
 
-    // Grid & Coordinates
+    // Grid & Background
     this.drawGrid();
+
+    // Clip inner plot area so zoomed/panned topology elements stay strictly within plot boundaries
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(m.left, m.top, plotW, plotH);
+    ctx.clip();
 
     // Voronoi subnet zones
     if (this.animatedCentroids.length > 0 && this.options.showVoronoi) {
@@ -686,6 +1020,8 @@ export class NetworkClusterChart {
       this.drawCentroids();
     }
 
+    ctx.restore();
+
     // Axes & Scale
     this.drawAxes();
   }
@@ -703,21 +1039,41 @@ export class NetworkClusterChart {
     ctx.strokeStyle = 'rgba(56, 189, 248, 0.05)';
     ctx.lineWidth = 1;
 
-    for (let val = 0; val <= 100; val += 20) {
-      const p1 = this.toCanvasCoords(val, 0);
-      const p2 = this.toCanvasCoords(val, 100);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(m.left, m.top, plotW, plotH);
+    ctx.clip();
+
+    let gridStep = 20;
+    if (this.zoom > 4) gridStep = 5;
+    else if (this.zoom > 1.8) gridStep = 10;
+
+    const topLeft = this.toDataCoords(m.left, m.top);
+    const bottomRight = this.toDataCoords(m.left + plotW, m.top + plotH);
+    const minX = Math.floor(Math.min(topLeft.x, bottomRight.x) / gridStep) * gridStep;
+    const maxX = Math.ceil(Math.max(topLeft.x, bottomRight.x) / gridStep) * gridStep;
+    const minY = Math.floor(Math.min(topLeft.y, bottomRight.y) / gridStep) * gridStep;
+    const maxY = Math.ceil(Math.max(topLeft.y, bottomRight.y) / gridStep) * gridStep;
+
+    for (let val = minX; val <= maxX; val += gridStep) {
+      const p1 = this.toCanvasCoords(val, minY);
+      const p2 = this.toCanvasCoords(val, maxY);
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
+    }
 
-      const h1 = this.toCanvasCoords(0, val);
-      const h2 = this.toCanvasCoords(100, val);
+    for (let val = minY; val <= maxY; val += gridStep) {
+      const h1 = this.toCanvasCoords(minX, val);
+      const h2 = this.toCanvasCoords(maxX, val);
       ctx.beginPath();
       ctx.moveTo(h1.x, h1.y);
       ctx.lineTo(h2.x, h2.y);
       ctx.stroke();
     }
+
+    ctx.restore();
   }
 
   drawAxes() {
@@ -732,19 +1088,48 @@ export class NetworkClusterChart {
 
     ctx.fillStyle = '#64748b';
     ctx.font = '11px JetBrains Mono, monospace';
+
+    let gridStep = 20;
+    if (this.zoom > 4) gridStep = 5;
+    else if (this.zoom > 1.8) gridStep = 10;
+
+    const topLeft = this.toDataCoords(m.left, m.top);
+    const bottomRight = this.toDataCoords(m.left + plotW, m.top + plotH);
+    const minX = Math.floor(Math.min(topLeft.x, bottomRight.x) / gridStep) * gridStep;
+    const maxX = Math.ceil(Math.max(topLeft.x, bottomRight.x) / gridStep) * gridStep;
+    const minY = Math.floor(Math.min(topLeft.y, bottomRight.y) / gridStep) * gridStep;
+    const maxY = Math.ceil(Math.max(topLeft.y, bottomRight.y) / gridStep) * gridStep;
+
+    // X-Axis Numbers & Ticks along bottom edge
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-
-    for (let val = 0; val <= 100; val += 20) {
+    for (let val = minX; val <= maxX; val += gridStep) {
       const p = this.toCanvasCoords(val, 0);
-      ctx.fillText(`${val}`, p.x, p.y + 8);
+      if (p.x >= m.left && p.x <= m.left + plotW) {
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
+        ctx.beginPath();
+        ctx.moveTo(p.x, m.top + plotH);
+        ctx.lineTo(p.x, m.top + plotH + 4);
+        ctx.stroke();
+
+        ctx.fillText(`${val}`, p.x, m.top + plotH + 8);
+      }
     }
 
+    // Y-Axis Numbers & Ticks along left edge
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    for (let val = 0; val <= 100; val += 20) {
+    for (let val = minY; val <= maxY; val += gridStep) {
       const p = this.toCanvasCoords(0, val);
-      ctx.fillText(`${val}`, p.x - 10, p.y);
+      if (p.y >= m.top && p.y <= m.top + plotH) {
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
+        ctx.beginPath();
+        ctx.moveTo(m.left - 4, p.y);
+        ctx.lineTo(m.left, p.y);
+        ctx.stroke();
+
+        ctx.fillText(`${val}`, m.left - 8, p.y);
+      }
     }
 
     ctx.font = '600 12px Inter, sans-serif';
@@ -787,7 +1172,7 @@ export class NetworkClusterChart {
   drawCentroidHalos() {
     const ctx = this.ctx;
     const plotW = this.width - this.margin.left - this.margin.right;
-    const scaleFactor = plotW / 100;
+    const scaleFactor = (plotW / 100) * this.zoom;
 
     for (let i = 0; i < this.animatedCentroids.length; i++) {
       const c = this.animatedCentroids[i];
@@ -843,31 +1228,42 @@ export class NetworkClusterChart {
       const p1 = this.toCanvasCoords(srcNode.renderX, srcNode.renderY);
       const p2 = this.toCanvasCoords(destNode.renderX, destNode.renderY);
 
-      const isConnectedToHovered =
+      const isDirectlyHovered =
         this.hoveredItem &&
-        this.hoveredItem.type === 'node' &&
-        (this.hoveredItem.key === animConn.srcKey || this.hoveredItem.key === animConn.destKey);
+        this.hoveredItem.type === 'connection' &&
+        this.hoveredItem.key === key;
+
+      const isConnectedToHovered =
+        (this.hoveredItem &&
+          this.hoveredItem.type === 'node' &&
+          (this.hoveredItem.key === animConn.srcKey || this.hoveredItem.key === animConn.destKey)) ||
+        isDirectlyHovered;
 
       const hasHover = !!this.hoveredItem;
       const isLatencyAlert = this.options.showAlertOverlays && conn.latencyMs > this.options.alertLatencyMs;
       const combinedAlpha = animConn.alpha * srcNode.alpha * destNode.alpha;
 
       ctx.save();
-      ctx.globalAlpha = combinedAlpha;
+      ctx.globalAlpha = isDirectlyHovered ? 1.0 : (hasHover && !isConnectedToHovered ? combinedAlpha * 0.22 : combinedAlpha);
 
       // Draw connection line
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
 
-      if (isLatencyAlert) {
+      if (isDirectlyHovered) {
+        ctx.strokeStyle = conn.color || '#38bdf8';
+        ctx.lineWidth = 3.8;
+        ctx.shadowColor = conn.color || '#38bdf8';
+        ctx.shadowBlur = 14;
+      } else if (isLatencyAlert) {
         ctx.strokeStyle = '#f59e0b';
         ctx.lineWidth = 2.2;
         ctx.shadowColor = '#f59e0b';
         ctx.shadowBlur = 10 + Math.sin(this.pulsePhase * 3) * 6;
       } else if (isConnectedToHovered) {
         ctx.strokeStyle = conn.color || '#10b981';
-        ctx.lineWidth = 2.0;
+        ctx.lineWidth = 2.2;
         ctx.shadowColor = conn.color || '#10b981';
         ctx.shadowBlur = 8;
       } else if (hasHover) {
@@ -890,10 +1286,11 @@ export class NetworkClusterChart {
         const packetY = p1.y + (p2.y - p1.y) * t;
 
         ctx.beginPath();
-        ctx.arc(packetX, packetY, isConnectedToHovered ? 3.5 : 2.0, 0, Math.PI * 2);
+        const pSize = isDirectlyHovered ? 4.8 : isConnectedToHovered ? 3.5 : 2.0;
+        ctx.arc(packetX, packetY, pSize, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = conn.color || '#10b981';
-        ctx.shadowBlur = 6;
+        ctx.shadowColor = conn.color || '#38bdf8';
+        ctx.shadowBlur = isDirectlyHovered ? 14 : 6;
         ctx.fill();
         ctx.shadowBlur = 0;
       }
@@ -916,10 +1313,14 @@ export class NetworkClusterChart {
       const pos = this.toCanvasCoords(node.renderX, node.renderY);
       const radius = Math.max(1, node.currentRadius);
 
-      const isHovered =
+      const isEndpointOfHoveredConn =
         this.hoveredItem &&
-        this.hoveredItem.type === 'node' &&
-        this.hoveredItem.key === key;
+        this.hoveredItem.type === 'connection' &&
+        (this.hoveredItem.animConn.srcKey === key || this.hoveredItem.animConn.destKey === key);
+
+      const isHovered =
+        (this.hoveredItem && this.hoveredItem.type === 'node' && this.hoveredItem.key === key) ||
+        isEndpointOfHoveredConn;
 
       const isPeerOfHovered =
         this.hoveredItem &&
@@ -968,17 +1369,31 @@ export class NetworkClusterChart {
         ctx.stroke();
       }
 
-      // Optional IP Host Labels
-      if (this.options.showIpLabels || isHovered) {
+      // Optional IP / DNS Host Labels
+      // Automatically show labels if Display IP Labels is ON, or if Resolve DNS is ON, or if hovered
+      const shouldShowLabel =
+        this.options.showIpLabels ||
+        this.options.resolveDns ||
+        isHovered;
+
+      if (shouldShowLabel) {
+        const hasDns = this.options.resolveDns && (node.data.dnsName || (node.data.hostname && node.data.hostname !== node.data.ip));
         ctx.font = isHovered ? 'bold 10px JetBrains Mono, monospace' : '9px JetBrains Mono, monospace';
-        ctx.fillStyle = isHovered ? '#ffffff' : 'rgba(203, 213, 225, 0.75)';
+        ctx.fillStyle = isHovered ? '#ffffff' : (hasDns ? '#38bdf8' : 'rgba(203, 213, 225, 0.85)');
         ctx.textAlign = 'center';
 
         const flagPrefix =
           this.options.showGeoip && node.data.flag && !node.data.isInternal ? `${node.data.flag} ` : '';
         let label = `${flagPrefix}${node.data.ip}`;
+
         if (this.options.resolveDns && node.data.dnsName) {
-          label = isHovered ? `${flagPrefix}${node.data.dnsName} (${node.data.ip})` : `${flagPrefix}${node.data.dnsName}`;
+          label = isHovered
+            ? `${flagPrefix}${node.data.dnsName} (${node.data.ip})`
+            : `${flagPrefix}${node.data.dnsName}`;
+        } else if (this.options.resolveDns && node.data.hostname && node.data.hostname !== node.data.ip) {
+          label = isHovered
+            ? `${flagPrefix}${node.data.hostname} (${node.data.ip})`
+            : `${flagPrefix}${node.data.hostname}`;
         } else if (isHovered && node.data.hostname && node.data.hostname !== node.data.ip) {
           label = `${flagPrefix}${node.data.hostname} (${node.data.ip})`;
         }
