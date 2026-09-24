@@ -1,25 +1,83 @@
 #!/usr/bin/env python3
 """
 Local HTTP Server for K-Means Network Topology Monitor.
-- Automatically kills any previous process occupying the port before binding.
-- Automatically opens the system's default web browser to the index page.
+- Serves static dashboard UI and assets.
+- Provides REST API (/api/network-telemetry) for live Linux internal & public network telemetry.
+- Automatically clears previous process on port before binding.
+- Automatically opens system default browser.
 """
 import sys
 import os
+import json
 import signal
 import time
 import subprocess
 import threading
+import urllib.parse
 import http.server
 import socketserver
 import socket
 import webbrowser
 
+from telemetry import RealNetworkCollector
+
 DEFAULT_PORT = 8080
+
+# Global network collector instance
+collector = RealNetworkCollector()
+
+class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
+    """Handles both static dashboard files and live network telemetry API requests."""
+
+    def end_headers(self):
+        if self.path.startswith('/api/'):
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path == '/api/network-telemetry':
+            params = urllib.parse.parse_qs(parsed.query)
+            scope = params.get('scope', ['all'])[0]
+            k_val = params.get('k', ['4'])[0]
+            target_k = int(k_val) if k_val.isdigit() else 4
+
+            data = collector.get_topology(scope=scope, target_k=target_k)
+            payload = json.dumps(data).encode('utf-8')
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        elif parsed.path == '/api/trigger-scan':
+            threading.Thread(target=collector.scan_lan_subnet, daemon=True).start()
+            payload = json.dumps({'status': 'scanning', 'message': 'LAN subnet ping sweep started'}).encode('utf-8')
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        # Serve static dashboard files
+        super().do_GET()
+
 
 def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
+
 
 def kill_process_on_port(port: int):
     """Detect and terminate any existing process holding the given port."""
@@ -67,7 +125,6 @@ def kill_process_on_port(port: int):
                     pass
             time.sleep(0.2)
 
-    # Final fallback if port still appears occupied
     if is_port_in_use(port):
         try:
             subprocess.run(["fuser", "-k", "-9", f"{port}/tcp"], stderr=subprocess.DEVNULL)
@@ -75,8 +132,9 @@ def kill_process_on_port(port: int):
         except Exception:
             pass
 
+
 def open_browser(url: str):
-    """Open the default system browser after the server has bound."""
+    """Open default web browser after server has started."""
     time.sleep(0.4)
     print(f"[serve.py] Opening default web browser to: {url}")
     try:
@@ -88,25 +146,24 @@ def open_browser(url: str):
         except Exception:
             print(f"[serve.py] Could not open browser automatically: {e}")
 
+
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else DEFAULT_PORT
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-    # Terminate any running process on this port so debugger starts cleanly
     if is_port_in_use(port):
         kill_process_on_port(port)
 
     url = f"http://localhost:{port}/index.html"
 
-    # Start browser opener in background thread
     threading.Thread(target=open_browser, args=(url,), daemon=True).start()
 
-    handler = http.server.SimpleHTTPRequestHandler
     socketserver.TCPServer.allow_reuse_address = True
 
     try:
-        with socketserver.TCPServer(("", port), handler) as httpd:
-            print(f"Serving HTTP on 0.0.0.0 port {port} ({url}) ...")
+        with socketserver.TCPServer(("", port), NetworkMonitorHTTPHandler) as httpd:
+            print(f"[serve.py] Serving Network Monitor with Live Telemetry API on http://0.0.0.0:{port} ...")
+            print(f"[serve.py] Telemetry API: http://localhost:{port}/api/network-telemetry")
             print("Press Ctrl+C to stop the server.")
             httpd.serve_forever()
     except KeyboardInterrupt:
@@ -114,6 +171,7 @@ def main():
     except Exception as e:
         print(f"[serve.py] Error starting server: {e}")
         sys.exit(1)
+
 
 if __name__ == '__main__':
     main()

@@ -78,9 +78,34 @@
         <span class="panel-badge">Config</span>
       </div>
 
+      <!-- Data Source Switcher -->
+      <div class="control-group" style="background: rgba(6, 182, 212, 0.06); border: 1px solid rgba(6, 182, 212, 0.2); border-radius: 8px; padding: 0.65rem;">
+        <div class="control-label-row">
+          <label for="dataSourceSelect" style="color: var(--accent-cyan); font-weight: 700;">Telemetry Source</label>
+          <span class="source-live-tag" id="sourceBadge">LIVE SYSTEM</span>
+        </div>
+        <select id="dataSourceSelect" class="styled-select source-select" style="margin-top: 0.35rem;">
+          <option value="real" selected>🟢 Live Real Network (Host & LAN)</option>
+          <option value="simulated">⚡ Simulated Benchmark Topology</option>
+        </select>
+      </div>
+
+      <!-- Traffic Scope Filter -->
+      <div class="control-group" id="scopeControlGroup">
+        <div class="control-label-row">
+          <label for="trafficScopeSelect">Traffic Scope</label>
+          <span style="font-size: 0.72rem; color: var(--text-muted);" id="scopeCounter">Internal + Public</span>
+        </div>
+        <select id="trafficScopeSelect" class="styled-select">
+          <option value="all" selected>🌐 All Traffic (Internal & Public)</option>
+          <option value="internal">🏠 Internal Only (LAN & Loopback)</option>
+          <option value="public">☁️ Public Only (External Internet)</option>
+        </select>
+      </div>
+
       <!-- Action Buttons -->
       <div class="action-buttons">
-        <button class="btn btn-primary" id="btnPlayPause" style="flex: 1;" title="Pause / Resume 10s auto telemetry stream">
+        <button class="btn btn-primary" id="btnPlayPause" style="flex: 1;" title="Pause / Resume auto telemetry stream">
           <svg id="playPauseIcon" width="14" height="14" viewBox="0 0 24 24">
             <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
             <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
@@ -88,11 +113,18 @@
           <span id="playPauseText">Pause</span>
         </button>
 
-        <button class="btn btn-secondary" id="btnGenerateNow" title="Trigger instant network burst">
+        <button class="btn btn-secondary" id="btnGenerateNow" title="Trigger instant network refresh">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
           </svg>
-          Burst Now
+          Refresh Now
+        </button>
+      </div>
+
+      <div style="display: flex; gap: 6px; margin-bottom: 0.85rem;">
+        <button class="btn btn-secondary" id="btnScanLan" style="flex: 1; font-size: 0.76rem; padding: 0.45rem 0.6rem; border-color: rgba(16, 185, 129, 0.3);" title="Ping local /24 subnet to discover new LAN devices">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2"/></svg>
+          <span style="color: #34d399;">Scan LAN Subnet</span>
         </button>
       </div>
 
@@ -115,19 +147,19 @@
         <input type="range" id="kSlider" min="2" max="8" value="4" step="1">
       </div>
 
-      <!-- IP Nodes Count Slider -->
-      <div class="control-group">
+      <!-- IP Nodes Count Slider (visible in simulated mode or informative) -->
+      <div class="control-group" id="nodeCountControlGroup">
         <div class="control-label-row">
           <label for="pointSlider">IP Host Nodes (N)</label>
-          <span class="control-value-badge" id="pointValueBadge">140</span>
+          <span class="control-value-badge" id="pointValueBadge">Live</span>
         </div>
-        <input type="range" id="pointSlider" min="40" max="300" value="140" step="10">
+        <input type="range" id="pointSlider" min="20" max="300" value="140" step="10">
       </div>
 
-      <!-- Topology Distribution -->
-      <div class="control-group">
+      <!-- Topology Distribution (used in simulated mode) -->
+      <div class="control-group" id="distControlGroup">
         <div class="control-label-row">
-          <label for="distSelect">Network Topology Mode</label>
+          <label for="distSelect">Simulated Topology Mode</label>
         </div>
         <select id="distSelect" class="styled-select">
           <option value="blobs" selected>Subnet Enclaves (Gaussian Blobs)</option>
@@ -248,7 +280,51 @@
           </svg>
           Network Telemetry
         </div>
-        <span class="panel-badge">Live NOC</span>
+        <span class="panel-badge" id="telemetryStatusBadge">Live NOC</span>
+      </div>
+
+      <!-- Host Interface & Live Network State Card -->
+      <div class="host-telemetry-card" id="hostTelemetryCard">
+        <div class="host-telemetry-header">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="nic-pulse-dot"></span>
+            <span style="font-weight:700;color:#f1f5f9;font-size:0.82rem;font-family:var(--font-mono);" id="hostInterfaceName">enp2s0</span>
+            <span class="nic-type-badge">ACTIVE NIC</span>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--accent-emerald);" id="hostBandwidthRate">
+            ↓ 0.0 KB/s  ↑ 0.0 KB/s
+          </span>
+        </div>
+        <div class="host-telemetry-body">
+          <div class="host-meta-item">
+            <span class="meta-label">Local Host IP</span>
+            <span class="meta-val" id="hostLocalIP">192.168.0.117</span>
+          </div>
+          <div class="host-meta-item">
+            <span class="meta-label">Default Gateway</span>
+            <span class="meta-val highlight-cyan" id="hostGatewayIP">192.168.0.1</span>
+          </div>
+        </div>
+        <!-- Internal vs Public Traffic Breakdown Chips -->
+        <div class="traffic-breakdown-row">
+          <div class="breakdown-pill internal-pill" id="pillInternal" title="Internal LAN & Localhost hosts and sockets">
+            <span class="pill-dot" style="background:#10b981;"></span>
+            <span class="pill-label">Internal:</span>
+            <b id="pillInternalVal">--</b>
+          </div>
+          <div class="breakdown-pill public-pill" id="pillPublic" title="External Internet hosts and sockets">
+            <span class="pill-dot" style="background:#06b6d4;"></span>
+            <span class="pill-label">Public:</span>
+            <b id="pillPublicVal">--</b>
+          </div>
+        </div>
+        <!-- Active Network Applications -->
+        <div class="host-processes-row" id="processRow">
+          <span style="font-size:0.68rem;color:var(--text-muted);font-weight:700;letter-spacing:0.04em;">ACTIVE PROCESSES:</span>
+          <div class="process-chips-container" id="processChipsContainer">
+            <!-- Dynamically populated e.g. chrome, antigravity-ide, etc. -->
+          </div>
+        </div>
       </div>
 
       <!-- Metric Cards Grid -->
