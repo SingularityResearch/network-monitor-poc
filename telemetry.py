@@ -17,12 +17,24 @@ import json
 import time
 import math
 import socket
+import struct
+import select
 import hashlib
 import ipaddress
 import subprocess
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+
+# Linux socket constants for raw packet capturing
+SOL_PACKET = 263
+PACKET_ADD_MEMBERSHIP = 1
+PACKET_DROP_MEMBERSHIP = 2
+PACKET_MR_PROMISC = 1
+ETH_P_ALL = 0x0003
+ETH_P_IP = 0x0800
+ETH_P_ARP = 0x0806
+
 
 def get_country_flag(country_code: str) -> str:
     """Convert 2-letter ISO country code to unicode regional indicator flag emoji."""
@@ -66,6 +78,7 @@ PORT_SERVICES = {
     1434: {'service': 'MSSQL-Browser', 'proto': 'UDP', 'color': '#0284c7', 'category': 'db'},
     1521: {'service': 'Oracle-DB', 'proto': 'TCP', 'color': '#dc2626', 'category': 'db'},
     1883: {'service': 'MQTT', 'proto': 'TCP', 'color': '#14b8a6', 'category': 'iot'},
+    1900: {'service': 'SSDP-UPnP', 'proto': 'UDP', 'color': '#06b6d4', 'category': 'iot'},
     2375: {'service': 'Docker', 'proto': 'TCP', 'color': '#0284c7', 'category': 'devops'},
     2376: {'service': 'Docker-TLS', 'proto': 'TCP', 'color': '#0369a1', 'category': 'devops'},
     2379: {'service': 'etcd-Client', 'proto': 'TCP', 'color': '#2563eb', 'category': 'k8s'},
@@ -78,7 +91,9 @@ PORT_SERVICES = {
     5000: {'service': 'Flask/API', 'proto': 'TCP', 'color': '#f59e0b', 'category': 'dev'},
     5173: {'service': 'Vite-Dev', 'proto': 'TCP', 'color': '#a78bfa', 'category': 'dev'},
     5228: {'service': 'GCM-Push', 'proto': 'TCP', 'color': '#f97316', 'category': 'cloud'},
+    5353: {'service': 'mDNS', 'proto': 'UDP', 'color': '#a855f7', 'category': 'infra'},
     5432: {'service': 'PostgreSQL', 'proto': 'TCP', 'color': '#ec4899', 'category': 'db'},
+
     5672: {'service': 'RabbitMQ', 'proto': 'TCP', 'color': '#ff6600', 'category': 'queue'},
     5900: {'service': 'VNC', 'proto': 'TCP', 'color': '#8b5cf6', 'category': 'admin'},
     6379: {'service': 'Redis', 'proto': 'TCP', 'color': '#f43f5e', 'category': 'cache'},
@@ -107,6 +122,206 @@ def get_service_for_port(port: int, default_proto: str = 'TCP'):
         return {'service': f'IPC-{port}', 'proto': default_proto, 'color': '#94a3b8', 'category': 'ipc'}
     return {'service': f'P-{port}', 'proto': default_proto, 'color': '#64748b', 'category': 'custom'}
 
+class RawPacketSniffer:
+    """
+    High-performance raw packet sniffer using Linux AF_PACKET sockets.
+    Captures Ethernet frames, IPv4, ARP, TCP, UDP, and ICMP traffic.
+    Enables promiscuous mode on the network interface to see passing traffic.
+    Discovers LAN hosts from ARP and IP headers, and records active inter-device flows.
+    """
+    def __init__(self, iface: str = None, local_ip: str = '127.0.0.1', promiscuous: bool = True, flow_ttl_sec: float = 45.0):
+        self.iface = iface
+        self.local_ip = local_ip
+        self.promiscuous = promiscuous
+        self.flow_ttl_sec = flow_ttl_sec
+        self.lock = threading.Lock()
+        
+        self.is_running = False
+        self.sock = None
+        self.thread = None
+        
+        self.packets_captured = 0
+        self.bytes_captured = 0
+        self.inter_device_packets = 0
+        self.status = "uninitialized"
+        self.status_message = ""
+        
+        self.active_flows = {}
+        self.discovered_hosts = set()
+
+    def start(self):
+        """Initialize the raw packet socket and launch background capture thread."""
+        if self.is_running:
+            return True
+            
+        try:
+            # Create raw packet socket capturing all Layer 2 Ethernet frames
+            self.sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+            
+            if self.iface:
+                try:
+                    self.sock.bind((self.iface, 0))
+                except Exception:
+                    pass
+                
+                # Enter promiscuous mode at the socket layer
+                if self.promiscuous:
+                    try:
+                        if_idx = socket.if_nametoindex(self.iface)
+                        mreq = struct.pack("IHH8s", if_idx, PACKET_MR_PROMISC, 0, b"")
+                        self.sock.setsockopt(SOL_PACKET, PACKET_ADD_MEMBERSHIP, mreq)
+                    except Exception:
+                        pass
+
+            self.sock.settimeout(0.5)
+            self.is_running = True
+            self.status = "active"
+            promisc_label = "promiscuous" if self.promiscuous else "standard"
+            self.status_message = f"Capturing on {self.iface} ({promisc_label} mode)"
+            
+            self.thread = threading.Thread(target=self._capture_loop, daemon=True, name="RawPacketSniffer")
+            self.thread.start()
+            return True
+
+        except PermissionError:
+            self.status = "permission_denied"
+            self.status_message = "Requires CAP_NET_RAW capability or sudo"
+            self.sock = None
+            return False
+        except Exception as e:
+            self.status = "error"
+            self.status_message = str(e)
+            self.sock = None
+            return False
+
+    def stop(self):
+        """Stop capture thread and close raw socket."""
+        self.is_running = False
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+        self.status = "stopped"
+
+    def _capture_loop(self):
+        """Worker thread continuously receiving and decoding raw packets."""
+        while self.is_running and self.sock:
+            try:
+                data, addr = self.sock.recvfrom(65535)
+                if not data or len(data) < 14:
+                    continue
+                
+                self.packets_captured += 1
+                pkt_len = len(data)
+                self.bytes_captured += pkt_len
+                now = time.time()
+                
+                eth_proto = struct.unpack('!6s6sH', data[:14])[2]
+                
+                # 1. ARP Frame
+                if eth_proto == ETH_P_ARP and pkt_len >= 42:
+                    arph = struct.unpack('!HHBBH6s4s6s4s', data[14:42])
+                    sender_ip = socket.inet_ntoa(arph[6])
+                    target_ip = socket.inet_ntoa(arph[8])
+                    with self.lock:
+                        if sender_ip and not sender_ip.startswith('0.'):
+                            self.discovered_hosts.add(sender_ip)
+                        if target_ip and not target_ip.startswith('0.'):
+                            self.discovered_hosts.add(target_ip)
+
+                # 2. IPv4 Packet
+                elif eth_proto == ETH_P_IP and pkt_len >= 34:
+                    iph = struct.unpack('!BBHHHBBH4s4s', data[14:34])
+                    ihl = (iph[0] & 0x0F) * 4
+                    if ihl < 20 or pkt_len < 14 + ihl:
+                        continue
+                    
+                    proto_num = iph[6]
+                    src_ip = socket.inet_ntoa(iph[8])
+                    dst_ip = socket.inet_ntoa(iph[9])
+                    
+                    if src_ip in ('0.0.0.0', '255.255.255.255') or dst_ip in ('0.0.0.0', '255.255.255.255'):
+                        continue
+                    
+                    with self.lock:
+                        # Add internal private IPs to discovered hosts
+                        if src_ip.startswith(('192.168.', '10.', '172.')):
+                            self.discovered_hosts.add(src_ip)
+                        if dst_ip.startswith(('192.168.', '10.', '172.')):
+                            self.discovered_hosts.add(dst_ip)
+                    
+                    payload_offset = 14 + ihl
+                    src_port = 0
+                    dst_port = 0
+                    proto_str = 'OTHER'
+                    
+                    if proto_num == 6 and pkt_len >= payload_offset + 4: # TCP
+                        tcph = struct.unpack('!HH', data[payload_offset:payload_offset+4])
+                        src_port, dst_port = tcph[0], tcph[1]
+                        proto_str = 'TCP'
+                    elif proto_num == 17 and pkt_len >= payload_offset + 4: # UDP
+                        udph = struct.unpack('!HH', data[payload_offset:payload_offset+4])
+                        src_port, dst_port = udph[0], udph[1]
+                        proto_str = 'UDP'
+                    elif proto_num == 1: # ICMP
+                        proto_str = 'ICMP'
+                    else:
+                        continue
+                    
+                    # Inter-device detection: neither endpoint is our local IP or loopback
+                    is_inter_device = (
+                        src_ip != self.local_ip and
+                        dst_ip != self.local_ip and
+                        src_ip != '127.0.0.1' and
+                        dst_ip != '127.0.0.1'
+                    )
+                    if is_inter_device:
+                        self.inter_device_packets += 1
+                        
+                    flow_key = (src_ip, src_port, dst_ip, dst_port, proto_str)
+                    with self.lock:
+                        if flow_key not in self.active_flows:
+                            self.active_flows[flow_key] = {
+                                'src_ip': src_ip,
+                                'src_port': src_port,
+                                'dest_ip': dst_ip,
+                                'dest_port': dst_port,
+                                'proto': proto_str,
+                                'bytes': 0,
+                                'packets': 0,
+                                'first_seen': now,
+                                'last_seen': now,
+                                'is_inter_device': is_inter_device
+                            }
+                        flow = self.active_flows[flow_key]
+                        flow['bytes'] += pkt_len
+                        flow['packets'] += 1
+                        flow['last_seen'] = now
+
+            except socket.timeout:
+                continue
+            except Exception:
+                continue
+
+    def get_active_flows(self, max_age: float = 45.0) -> list:
+        """Prune expired flows and return snapshot of current active flows."""
+        now = time.time()
+        flows = []
+        with self.lock:
+            for k, v in list(self.active_flows.items()):
+                if now - v['last_seen'] <= max_age:
+                    flows.append(dict(v))
+                else:
+                    del self.active_flows[k]
+        return flows
+
+    def get_discovered_hosts(self) -> set:
+        with self.lock:
+            return set(self.discovered_hosts)
+
+
 class RealNetworkCollector:
     def __init__(self, history_window_sec: int = 90):
         self.history_window_sec = history_window_sec
@@ -119,7 +334,7 @@ class RealNetworkCollector:
         # Recent connections ring buffer: key -> {conn_data, last_seen}
         self.recent_connections = {}
         
-        # Subnet hosts discovered via ping / ARP
+        # Subnet hosts discovered via ping / ARP / raw sniffer
         self.discovered_lan_hosts = set()
         self.last_scan_time = 0
         self.is_scanning = False
@@ -131,8 +346,19 @@ class RealNetworkCollector:
         self.rx_rate_kbps = 0.0
         self.tx_rate_kbps = 0.0
 
+        # Start Raw Packet Sniffer in promiscuous mode on active interface
+        routes = self.get_system_routes()
+        self.sniffer = RawPacketSniffer(
+            iface=routes.get('iface', 'eth0'),
+            local_ip=routes.get('local_ip', '127.0.0.1'),
+            promiscuous=True,
+            flow_ttl_sec=self.history_window_sec
+        )
+        self.sniffer.start()
+
         # Run initial LAN discovery in background
         threading.Thread(target=self.scan_lan_subnet, daemon=True).start()
+
 
     def get_system_routes(self):
         """Retrieve default gateway, local IP, and primary network interface."""
@@ -635,9 +861,9 @@ class RealNetworkCollector:
         raw_sockets = self.collect_live_sockets()
         arp_hosts = self.get_arp_hosts()
         
-        # Combine ARP hosts with ping-discovered hosts
+        # Combine ARP hosts with ping-discovered hosts and raw-sniffed hosts
         with self.lock:
-            all_lan_hosts = set(arp_hosts).union(self.discovered_lan_hosts)
+            all_lan_hosts = set(arp_hosts).union(self.discovered_lan_hosts).union(self.sniffer.get_discovered_hosts())
             all_lan_hosts.add(routes['default_gw'])
             all_lan_hosts.add(routes['local_ip'])
 
@@ -651,6 +877,41 @@ class RealNetworkCollector:
                 'socket': sock,
                 'last_seen': now
             }
+
+        # Ingest flows captured by raw packet sniffer (including inter-device traffic)
+        captured_flows = self.sniffer.get_active_flows(max_age=self.history_window_sec)
+        for flow in captured_flows:
+            src_ip = flow['src_ip']
+            dest_ip = flow['dest_ip']
+            src_port = flow['src_port']
+            dest_port = flow['dest_port']
+            proto = flow['proto']
+            conn_key = f"{src_ip}:{src_port}->{dest_ip}:{dest_port}"
+            
+            # If not already tracked by ss with local process attribution, add it:
+            if conn_key not in self.recent_connections:
+                process_label = 'Raw Sniffer (Inter-Device)' if flow['is_inter_device'] else 'Raw Sniffer'
+                self.recent_connections[conn_key] = {
+                    'socket': {
+                        'proto': proto,
+                        'state': 'CAPTURED',
+                        'local_ip': src_ip,
+                        'local_port': src_port,
+                        'peer_ip': dest_ip,
+                        'peer_port': dest_port,
+                        'process': process_label,
+                        'pid': None,
+                        'recv_q': 0,
+                        'send_q': 0,
+                        'metrics': {
+                            'bytes_sent': flow['bytes'],
+                            'bytes_received': 0,
+                            'packets': flow['packets']
+                        }
+                    },
+                    'last_seen': flow['last_seen']
+                }
+
 
         # Purge stale connections older than history window
         cutoff = now - self.history_window_sec
@@ -942,6 +1203,21 @@ class RealNetworkCollector:
                 'internalSocketsCount': internal_sockets_count,
                 'publicSocketsCount': public_sockets_count,
                 'activeProcesses': active_processes,
+                'pcap': {
+                    'enabled': True,
+                    'status': self.sniffer.status,
+                    'statusMessage': self.sniffer.status_message,
+                    'interface': self.sniffer.iface,
+                    'promiscuous': self.sniffer.promiscuous,
+                    'packetsCaptured': self.sniffer.packets_captured,
+                    'bytesCaptured': self.sniffer.bytes_captured,
+                    'interDevicePackets': self.sniffer.inter_device_packets,
+                    'activeFlows': len(captured_flows),
+                    'permissionHelp': (
+                        "sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))"
+                        if self.sniffer.status == "permission_denied" else ""
+                    )
+                },
                 'timestamp': time.strftime('%H:%M:%S')
             }
         }

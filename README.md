@@ -124,6 +124,35 @@ The application includes an embedded, high-performance SQLite storage engine ([d
 
 ---
 
+## Raw Packet Capture & Inter-Device Traffic Monitoring
+
+The monitor includes a built-in, pure-Python raw packet capture engine (`RawPacketSniffer` in [telemetry.py](file:///home/shivachrome/source/repos/network-monitor/telemetry.py)) using Linux `AF_PACKET` raw sockets.
+
+### 1. Enabling Packet Capture Permissions
+Raw socket packet capture on Linux requires `CAP_NET_RAW` capability. You can grant this to your Python binary without needing to run your entire development environment as root:
+```bash
+sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
+```
+Alternatively, launch the server directly with `sudo`:
+```bash
+sudo python3 serve.py 8080
+```
+*(If run unprivileged without capabilities, the server automatically degrades gracefully to kernel socket telemetry via `ss` and `/proc/net` without errors).*
+
+### 2. Seeing Traffic Between Other Devices on a Home Network
+In modern switched Ethernet and WPA-encrypted Wi-Fi networks, network switches and access points do not broadcast unicast packets between device A and device B to device C's port. To capture and visualize traffic flowing between other devices on your home network:
+
+- **Option A: Run on your Router or Gateway (Recommended)**
+  Run the server on a Linux-based router (e.g. Raspberry Pi router, OpenWrt device, pfSense/OPNsense machine, or Proxmox gateway). Because all inter-subnet and internet-bound device traffic physically traverses the router, the sniffer will capture all device flows.
+- **Option B: Managed Switch Port Mirroring (SPAN Port)**
+  Connect your monitoring PC to a managed switch with Port Mirroring (SPAN) configured to duplicate all packets from the router's uplink port to your monitor PC's Ethernet port.
+- **Option C: Hardware Network TAP or Transparent Bridge**
+  Place a passive hardware Ethernet TAP inline, or configure your Linux host with two network cards as a transparent bridge (`br0`) between your router and switch.
+- **Broadcast & Multicast Discovery (Standard Switch Ports)**
+  Even on an ordinary unmanaged switch port without mirroring, the raw sniffer automatically captures all local **ARP requests**, **DHCP announcements**, **mDNS / Bonjour (port 5353)**, and **SSDP UPnP (port 1900)** broadcasts, discovering smart home devices, IoT hardware, and local network services automatically.
+
+---
+
 ## Running Locally
 
 Run [serve.py](file:///home/shivachrome/source/repos/network-monitor/serve.py):
@@ -131,3 +160,4 @@ Run [serve.py](file:///home/shivachrome/source/repos/network-monitor/serve.py):
 python3 serve.py 8080
 ```
 Then open **[http://localhost:8080](http://localhost:8080)** in your browser.
+

@@ -493,7 +493,24 @@
             <!-- Dynamically populated e.g. chrome, antigravity-ide, etc. -->
           </div>
         </div>
+
+        <!-- Raw Packet Sniffer & Promiscuous Mode State -->
+        <div class="pcap-status-row" id="pcapStatusRow" style="margin-top:0.6rem; padding-top:0.55rem; border-top:1px solid rgba(255,255,255,0.06);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:0.68rem; font-weight:700; color:var(--text-muted); letter-spacing:0.04em;">RAW PACKET CAPTURE</span>
+            <span class="source-live-tag" id="pcapStatusTag" style="font-size:0.65rem; padding:1px 6px;">CHECKING...</span>
+          </div>
+          <div style="font-size:0.72rem; color:#94a3b8; display:flex; justify-content:space-between; align-items:center;" id="pcapStatsText">
+            <span>Packets: <b style="color:#f1f5f9;" id="pcapPacketCount">0</b></span>
+            <span>Inter-Device: <b style="color:var(--accent-cyan);" id="pcapInterDeviceCount">0</b></span>
+          </div>
+          <div id="pcapHelpNotice" style="display:none; margin-top:6px; font-size:0.68rem; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.25); border-radius:6px; padding:6px; color:#fbbf24; line-height:1.35;">
+            <span>To sniff passing packets between other devices:</span>
+            <code style="display:block; margin-top:3px; background:#0f172a; padding:4px 6px; border-radius:4px; font-family:var(--font-mono); color:#38bdf8; word-break:break-all; user-select:all;" id="pcapHelpCommand">sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))</code>
+          </div>
+        </div>
       </div>
+
 
       <!-- Metric Cards Grid -->
       <div class="metrics-grid">

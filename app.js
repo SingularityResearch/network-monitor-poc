@@ -701,6 +701,43 @@ class NetworkClusterApp {
         this.processChipsContainer.innerHTML = '<span style="font-size:0.68rem;color:#64748b;">Idle / No active named processes</span>';
       }
     }
+
+    if (meta.pcap) {
+      const pcap = meta.pcap;
+      const tag = document.getElementById('pcapStatusTag');
+      const pktEl = document.getElementById('pcapPacketCount');
+      const interEl = document.getElementById('pcapInterDeviceCount');
+      const helpNotice = document.getElementById('pcapHelpNotice');
+      const helpCmd = document.getElementById('pcapHelpCommand');
+
+      if (pktEl) pktEl.textContent = (pcap.packetsCaptured || 0).toLocaleString();
+      if (interEl) interEl.textContent = (pcap.interDevicePackets || 0).toLocaleString();
+
+      if (tag) {
+        if (pcap.status === 'active') {
+          tag.textContent = pcap.promiscuous ? 'PROMISC ACTIVE' : 'ACTIVE';
+          tag.style.background = 'rgba(16, 185, 129, 0.15)';
+          tag.style.color = '#34d399';
+          tag.style.borderColor = 'rgba(16, 185, 129, 0.35)';
+          if (helpNotice) helpNotice.style.display = 'none';
+        } else if (pcap.status === 'permission_denied') {
+          tag.textContent = 'PERMISSION REQUIRED';
+          tag.style.background = 'rgba(245, 158, 11, 0.15)';
+          tag.style.color = '#fbbf24';
+          tag.style.borderColor = 'rgba(245, 158, 11, 0.35)';
+          if (helpNotice) {
+            helpNotice.style.display = 'block';
+            if (helpCmd && pcap.permissionHelp) helpCmd.textContent = pcap.permissionHelp;
+          }
+        } else {
+          tag.textContent = pcap.status ? pcap.status.toUpperCase() : 'OFFLINE';
+          tag.style.background = 'rgba(148, 163, 184, 0.15)';
+          tag.style.color = '#94a3b8';
+          tag.style.borderColor = 'rgba(148, 163, 184, 0.25)';
+          if (helpNotice) helpNotice.style.display = 'none';
+        }
+      }
+    }
   }
 
   reclusterTopology() {
