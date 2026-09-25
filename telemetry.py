@@ -841,7 +841,7 @@ class RealNetworkCollector:
 
         return sockets
 
-    def get_topology(self, scope: str = 'all', target_k: int = 4, resolve_dns: bool = False, resolve_geoip: bool = True):
+    def get_topology(self, scope: str = 'all', target_k: int = 4, resolve_dns: bool = True, resolve_geoip: bool = True):
         """
         Assemble the full network topology:
         - Nodes (Internal LAN, Loopback, Public Cloud, Public Web)
@@ -1182,12 +1182,17 @@ class RealNetworkCollector:
         internal_sockets_count = sum(1 for c in connections if c['isInternal'])
         public_sockets_count = sum(1 for c in connections if not c['isInternal'])
 
+        # Extract Relational Graph Clusters (Internal Mesh, Shared Domains/URLs, Common Protocols)
+        relationships = self.extract_relationships(nodes, connections)
+
         return {
             'nodes': nodes,
             'connections': connections,
+            'relationships': relationships,
             'sockets': detailed_sockets,
             'subnetGateways': ZONE_CENTERS,
             'meta': {
+
                 'source': 'real',
                 'scope': scope,
                 'resolveDns': resolve_dns,
@@ -1221,6 +1226,202 @@ class RealNetworkCollector:
                 'timestamp': time.strftime('%H:%M:%S')
             }
         }
+
+    def extract_relationships(self, nodes: list, connections: list) -> dict:
+        """
+        Analyze network topology to extract high-value relational clusters:
+        1. Internal Mesh: Host-to-Host direct internal communications (peer-to-peer, lateral flows)
+        2. Shared Destinations: Common external hostnames, URLs, and domains contacted by multiple hosts
+        3. Common Protocols: Sockets clustered by protocol/service with participating clients & servers
+        """
+        nodes_by_ip = {n['ip']: n for n in nodes}
+        
+        # 1. Internal Mesh (direct communication between two internal hosts)
+        internal_mesh_map = {}
+        for c in connections:
+            src = c['srcIP']
+            dst = c['destIP']
+            src_node = nodes_by_ip.get(src, {})
+            dst_node = nodes_by_ip.get(dst, {})
+            
+            if src_node.get('isInternal') and dst_node.get('isInternal'):
+                if src == '127.0.0.1' and dst == '127.0.0.1':
+                    continue
+                pair_key = tuple(sorted([src, dst]))
+                if pair_key not in internal_mesh_map:
+                    internal_mesh_map[pair_key] = {
+                        'hostA': pair_key[0],
+                        'hostB': pair_key[1],
+                        'hostAName': nodes_by_ip.get(pair_key[0], {}).get('hostname') or pair_key[0],
+                        'hostBName': nodes_by_ip.get(pair_key[1], {}).get('hostname') or pair_key[1],
+                        'ports': set(),
+                        'services': set(),
+                        'protocols': set(),
+                        'processes': set(),
+                        'connectionCount': 0,
+                        'totalThroughputKbps': 0,
+                        'latencies': []
+                    }
+                item = internal_mesh_map[pair_key]
+                item['connectionCount'] += 1
+                item['ports'].add(c.get('destPort', 0))
+                item['services'].add(c.get('service', 'Unknown'))
+                item['protocols'].add(c.get('proto', 'TCP'))
+                if c.get('process'):
+                    item['processes'].add(c.get('process'))
+                item['totalThroughputKbps'] += c.get('throughputKbps', 0)
+                if c.get('latencyMs'):
+                    item['latencies'].append(c.get('latencyMs'))
+
+        internal_mesh = []
+        for pair_key, data in internal_mesh_map.items():
+            avg_lat = round(sum(data['latencies']) / len(data['latencies']), 2) if data['latencies'] else None
+            internal_mesh.append({
+                'id': f"mesh_{pair_key[0].replace('.', '_')}_{pair_key[1].replace('.', '_')}",
+                'hostA': data['hostA'],
+                'hostB': data['hostB'],
+                'hostAName': data['hostAName'],
+                'hostBName': data['hostBName'],
+                'ports': sorted(list(data['ports'])),
+                'services': sorted(list(data['services'])),
+                'protocols': sorted(list(data['protocols'])),
+                'processes': sorted(list(data['processes'])),
+                'connectionCount': data['connectionCount'],
+                'totalThroughputKbps': round(data['totalThroughputKbps'], 1),
+                'avgLatencyMs': avg_lat
+            })
+        internal_mesh.sort(key=lambda x: (x['connectionCount'], x['totalThroughputKbps']), reverse=True)
+
+        # 2. Shared Destinations & Common Domains / URLs
+        dest_map = {}
+        for c in connections:
+            src = c['srcIP']
+            dst = c['destIP']
+            src_node = nodes_by_ip.get(src, {})
+            dst_node = nodes_by_ip.get(dst, {})
+            
+            # Internal client connecting to an external destination
+            if src_node.get('isInternal') and not dst_node.get('isInternal'):
+                hostname = dst_node.get('dnsName') or dst_node.get('hostname') or dst
+                org = dst_node.get('org') or ''
+                geo = dst_node.get('geo', {})
+                flag = dst_node.get('flag') or '🌐'
+                
+                # Extract root domain or group key (e.g. "github.com", "google.com")
+                parts = hostname.split('.')
+                if len(parts) >= 2 and not parts[-1].isdigit():
+                    group_key = '.'.join(parts[-2:])
+                else:
+                    group_key = org if org and org != 'Public Host' else hostname
+                
+                if group_key not in dest_map:
+                    dest_map[group_key] = {
+                        'groupKey': group_key,
+                        'primaryHost': hostname,
+                        'org': org,
+                        'flag': flag,
+                        'country': dst_node.get('country') or geo.get('country') or 'Public',
+                        'destinationIPs': set(),
+                        'clientIPs': set(),
+                        'ports': set(),
+                        'services': set(),
+                        'connectionCount': 0,
+                        'totalThroughputKbps': 0,
+                        'latencies': []
+                    }
+                d = dest_map[group_key]
+                d['destinationIPs'].add(dst)
+                d['clientIPs'].add(src)
+                d['ports'].add(c.get('destPort', 0))
+                d['services'].add(c.get('service', 'Unknown'))
+                d['connectionCount'] += 1
+                d['totalThroughputKbps'] += c.get('throughputKbps', 0)
+                if c.get('latencyMs'):
+                    d['latencies'].append(c.get('latencyMs'))
+
+        shared_destinations = []
+        for k, data in dest_map.items():
+            avg_lat = round(sum(data['latencies']) / len(data['latencies']), 2) if data['latencies'] else None
+            shared_destinations.append({
+                'id': f"dest_{hashlib.md5(k.encode()).hexdigest()[:8]}",
+                'groupKey': data['groupKey'],
+                'primaryHost': data['primaryHost'],
+                'org': data['org'],
+                'flag': data['flag'],
+                'country': data['country'],
+                'destinationIPs': sorted(list(data['destinationIPs'])),
+                'clientIPs': sorted(list(data['clientIPs'])),
+                'clientCount': len(data['clientIPs']),
+                'ports': sorted(list(data['ports'])),
+                'services': sorted(list(data['services'])),
+                'connectionCount': data['connectionCount'],
+                'totalThroughputKbps': round(data['totalThroughputKbps'], 1),
+                'avgLatencyMs': avg_lat
+            })
+        shared_destinations.sort(key=lambda x: (x['clientCount'], x['connectionCount']), reverse=True)
+
+        # 3. Common Protocol & Service Affinity
+        proto_map = {}
+        for c in connections:
+            service = c.get('service', 'Unknown')
+            port = c.get('destPort', 0)
+            proto = c.get('proto', 'TCP')
+            key = f"{service}:{port}"
+            
+            if key not in proto_map:
+                proto_map[key] = {
+                    'service': service,
+                    'port': port,
+                    'proto': proto,
+                    'color': c.get('color', '#38bdf8'),
+                    'category': c.get('category', 'custom'),
+                    'clients': set(),
+                    'destinations': set(),
+                    'connectionCount': 0,
+                    'totalThroughputKbps': 0,
+                    'latencies': []
+                }
+            p = proto_map[key]
+            p['clients'].add(c['srcIP'])
+            p['destinations'].add(c['destIP'])
+            p['connectionCount'] += 1
+            p['totalThroughputKbps'] += c.get('throughputKbps', 0)
+            if c.get('latencyMs'):
+                p['latencies'].append(c.get('latencyMs'))
+
+        common_protocols = []
+        for k, data in proto_map.items():
+            avg_lat = round(sum(data['latencies']) / len(data['latencies']), 2) if data['latencies'] else None
+            common_protocols.append({
+                'id': f"proto_{data['service'].replace('/', '_')}_{data['port']}",
+                'service': data['service'],
+                'port': data['port'],
+                'proto': data['proto'],
+                'color': data['color'],
+                'category': data['category'],
+                'clientCount': len(data['clients']),
+                'destinationCount': len(data['destinations']),
+                'clients': sorted(list(data['clients'])),
+                'destinations': sorted(list(data['destinations'])),
+                'connectionCount': data['connectionCount'],
+                'totalThroughputKbps': round(data['totalThroughputKbps'], 1),
+                'avgLatencyMs': avg_lat
+            })
+        common_protocols.sort(key=lambda x: (x['clientCount'], x['connectionCount']), reverse=True)
+
+        return {
+            'internalMesh': internal_mesh,
+            'sharedDestinations': shared_destinations,
+            'commonProtocols': common_protocols,
+            'summary': {
+                'totalInternalPairs': len(internal_mesh),
+                'totalSharedDestinations': len(shared_destinations),
+                'totalCommonProtocols': len(common_protocols),
+                'topInternalPair': f"{internal_mesh[0]['hostA']} ↔ {internal_mesh[0]['hostB']}" if internal_mesh else None,
+                'topDestination': shared_destinations[0]['groupKey'] if shared_destinations else None
+            }
+        }
+
 
 if __name__ == '__main__':
     collector = RealNetworkCollector()

@@ -32,7 +32,7 @@ export class NetworkClusterChart {
       showHalos: true,
       showVoronoi: false,
       showIpLabels: false,
-      resolveDns: false,
+      resolveDns: true,
       showGeoip: true,
       showAlertOverlays: true,
       organicDrift: true,
@@ -82,12 +82,31 @@ export class NetworkClusterChart {
 
     this.onZoomChange = null;
 
+    // Relational focus filter state (focuses on specific host pairs, shared domains, or protocols)
+    this.focusFilter = null;
+    this.onFocusChange = null;
+
     this.setupEvents();
     this.resize();
 
     this.animate = this.animate.bind(this);
     requestAnimationFrame(this.animate);
   }
+
+  setFocusRelationship(focus) {
+    this.focusFilter = focus;
+    if (this.onFocusChange) {
+      this.onFocusChange(this.focusFilter);
+    }
+  }
+
+  clearFocusRelationship() {
+    this.focusFilter = null;
+    if (this.onFocusChange) {
+      this.onFocusChange(null);
+    }
+  }
+
 
   resize() {
     const rect = this.canvas.getBoundingClientRect();
@@ -191,7 +210,14 @@ export class NetworkClusterChart {
         this.zoomAt(e.clientX - rect.left, e.clientY - rect.top, 2.0);
       }
     });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.focusFilter) {
+        this.clearFocusRelationship();
+      }
+    });
   }
+
 
   zoomAt(canvasX, canvasY, factor) {
     const oldZoom = this.targetZoom;
@@ -1146,7 +1172,9 @@ export class NetworkClusterChart {
   }
 
   drawGatewayLines() {
+    if (this.focusFilter) return; // Hide centroid spiderweb when focusing on a relationship
     const ctx = this.ctx;
+
 
     for (const [key, node] of this.animatedNodes.entries()) {
       if (node.alpha < 0.05) continue;
@@ -1239,21 +1267,35 @@ export class NetworkClusterChart {
           (this.hoveredItem.key === animConn.srcKey || this.hoveredItem.key === animConn.destKey)) ||
         isDirectlyHovered;
 
+      const hasFocus = !!this.focusFilter;
+      let isFocusMatched = false;
+      if (hasFocus) {
+        if (this.focusFilter.matchConn) {
+          isFocusMatched = this.focusFilter.matchConn(conn, animConn);
+        } else if (this.focusFilter.nodeKeys) {
+          isFocusMatched = this.focusFilter.nodeKeys.has(animConn.srcKey) && this.focusFilter.nodeKeys.has(animConn.destKey);
+        }
+      }
+
       const hasHover = !!this.hoveredItem;
       const isLatencyAlert = this.options.showAlertOverlays && conn.latencyMs > this.options.alertLatencyMs;
       const combinedAlpha = animConn.alpha * srcNode.alpha * destNode.alpha;
 
       ctx.save();
-      ctx.globalAlpha = isDirectlyHovered ? 1.0 : (hasHover && !isConnectedToHovered ? combinedAlpha * 0.22 : combinedAlpha);
+      if (hasFocus) {
+        ctx.globalAlpha = isFocusMatched ? (isDirectlyHovered ? 1.0 : 0.95) : combinedAlpha * 0.06;
+      } else {
+        ctx.globalAlpha = isDirectlyHovered ? 1.0 : (hasHover && !isConnectedToHovered ? combinedAlpha * 0.22 : combinedAlpha);
+      }
 
       // Draw connection line
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
 
-      if (isDirectlyHovered) {
+      if (isDirectlyHovered || (hasFocus && isFocusMatched)) {
         ctx.strokeStyle = conn.color || '#38bdf8';
-        ctx.lineWidth = 3.8;
+        ctx.lineWidth = isDirectlyHovered ? 3.8 : 2.6;
         ctx.shadowColor = conn.color || '#38bdf8';
         ctx.shadowBlur = 14;
       } else if (isLatencyAlert) {
@@ -1280,7 +1322,8 @@ export class NetworkClusterChart {
       ctx.shadowBlur = 0;
 
       // Draw Animated Packet Pulse traveling along the vector
-      if (this.options.showPackets && !animConn.isDeparting) {
+      if (this.options.showPackets && !animConn.isDeparting && (!hasFocus || isFocusMatched)) {
+
         const t = animConn.packetPhase;
         const packetX = p1.x + (p2.x - p1.x) * t;
         const packetY = p1.y + (p2.y - p1.y) * t;
@@ -1331,15 +1374,23 @@ export class NetworkClusterChart {
             ((c.destIP || String(c.destId)) === this.hoveredItem.key && (c.srcIP || String(c.srcId)) === key)
         );
 
+      const hasFocus = !!this.focusFilter;
+      const isNodeInFocus = hasFocus && this.focusFilter.nodeKeys ? this.focusFilter.nodeKeys.has(key) : false;
+
       ctx.save();
-      ctx.globalAlpha = node.alpha;
+      if (hasFocus) {
+        ctx.globalAlpha = isNodeInFocus ? 1.0 : node.alpha * 0.12;
+      } else {
+        ctx.globalAlpha = node.alpha;
+      }
 
       ctx.beginPath();
-      ctx.arc(pos.x, pos.y, isHovered ? radius + 3 : radius, 0, Math.PI * 2);
+      const nodeR = isHovered ? radius + 3 : (hasFocus && isNodeInFocus ? radius + 2.5 : radius);
+      ctx.arc(pos.x, pos.y, nodeR, 0, Math.PI * 2);
 
-      if (isHovered) {
+      if (isHovered || (hasFocus && isNodeInFocus)) {
         ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = palette.main;
+        ctx.shadowColor = (hasFocus && isNodeInFocus) ? '#38bdf8' : palette.main;
         ctx.shadowBlur = 14;
       } else if (isPeerOfHovered) {
         ctx.fillStyle = '#f8fafc';
@@ -1353,8 +1404,8 @@ export class NetworkClusterChart {
       ctx.fill();
 
       // Outer host border
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = isHovered ? '#ffffff' : 'rgba(10, 15, 29, 0.9)';
+      ctx.lineWidth = (hasFocus && isNodeInFocus) ? 2.5 : 1.5;
+      ctx.strokeStyle = isHovered ? '#ffffff' : (hasFocus && isNodeInFocus ? '#38bdf8' : 'rgba(10, 15, 29, 0.9)');
       ctx.stroke();
       ctx.shadowBlur = 0;
 
@@ -1370,11 +1421,13 @@ export class NetworkClusterChart {
       }
 
       // Optional IP / DNS Host Labels
-      // Automatically show labels if Display IP Labels is ON, or if Resolve DNS is ON, or if hovered
+      // Automatically show labels if Display IP Labels is ON, or if Resolve DNS is ON, or if hovered, or if in relationship focus
       const shouldShowLabel =
         this.options.showIpLabels ||
         this.options.resolveDns ||
-        isHovered;
+        isHovered ||
+        (hasFocus && isNodeInFocus);
+
 
       if (shouldShowLabel) {
         const hasDns = this.options.resolveDns && (node.data.dnsName || (node.data.hostname && node.data.hostname !== node.data.ip));

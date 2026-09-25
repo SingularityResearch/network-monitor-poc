@@ -1,5 +1,5 @@
-import { KMeans } from './kmeans.js';
-import { NetworkClusterChart } from './chart.js';
+import { KMeans } from './kmeans.js?v=20260925_rel';
+import { NetworkClusterChart } from './chart.js?v=20260925_rel';
 
 // Comprehensive well-known destination port catalog and service definitions
 // Comprehensive well-known destination port catalog and service definitions (ordered ascending by port number)
@@ -138,6 +138,34 @@ class NetworkClusterApp {
     this.statTotalSent = document.getElementById('statTotalSent');
     this.btnFilterChartToSelection = document.getElementById('btnFilterChartToSelection');
 
+    // Network Relationships & Correlation Controls
+    this.btnOpenRelationships = document.getElementById('btnOpenRelationships');
+    this.btnSidebarRelationships = document.getElementById('btnSidebarRelationships');
+    this.headerRelCount = document.getElementById('headerRelCount');
+    this.relDrawer = document.getElementById('relDrawer');
+    this.relDrawerBackdrop = document.getElementById('relDrawerBackdrop');
+    this.btnCloseRelDrawer = document.getElementById('btnCloseRelDrawer');
+    this.canvasFocusBanner = document.getElementById('canvasFocusBanner');
+    this.canvasFocusTitle = document.getElementById('canvasFocusTitle');
+    this.canvasFocusDetails = document.getElementById('canvasFocusDetails');
+    this.btnClearCanvasFocus = document.getElementById('btnClearCanvasFocus');
+    this.relKpiMeshVal = document.getElementById('relKpiMeshVal');
+    this.relKpiDomainsVal = document.getElementById('relKpiDomainsVal');
+    this.relKpiProtosVal = document.getElementById('relKpiProtosVal');
+    this.relKpiTopVal = document.getElementById('relKpiTopVal');
+    this.countTabMesh = document.getElementById('countTabMesh');
+    this.countTabDomains = document.getElementById('countTabDomains');
+    this.countTabProtocols = document.getElementById('countTabProtocols');
+    this.tabRelMesh = document.getElementById('tabRelMesh');
+    this.tabRelDomains = document.getElementById('tabRelDomains');
+    this.tabRelProtocols = document.getElementById('tabRelProtocols');
+    this.relSearchInput = document.getElementById('relSearchInput');
+    this.relContentScroll = document.getElementById('relContentScroll');
+
+    this.relationshipsData = null;
+    this.currentRelTab = 'mesh';
+    this.relSearchQuery = '';
+
     // Historical Topology Timeline Controls
     this.timelineBar = document.getElementById('timelineBar');
     this.btnTimelineStepBack = document.getElementById('btnTimelineStepBack');
@@ -187,7 +215,7 @@ class NetworkClusterApp {
 
     // State
     this.trafficScope = this.trafficScopeSelect ? this.trafficScopeSelect.value : 'all';
-    this.resolveDns = this.toggleDnsLookup ? this.toggleDnsLookup.checked : false;
+    this.resolveDns = this.toggleDnsLookup ? this.toggleDnsLookup.checked : true;
     this.resolveGeoip = this.toggleGeoip ? this.toggleGeoip.checked : true;
     this.alertLatencyMs = parseInt(this.sliderLatencyAlert?.value || '50', 10);
     this.alertThroughputMbps = parseInt(this.sliderBandwidthAlert?.value || '10', 10);
@@ -251,6 +279,17 @@ class NetworkClusterApp {
         this.openSocketInspector('cluster', item.index);
       } else if (item.type === 'connection') {
         this.openSocketInspector('flow', item.data);
+      }
+    };
+
+    // Reflect Canvas relationship focus in floating HUD banner
+    this.chart.onFocusChange = (focus) => {
+      if (focus) {
+        if (this.canvasFocusBanner) this.canvasFocusBanner.style.display = 'block';
+        if (this.canvasFocusTitle) this.canvasFocusTitle.textContent = focus.title || 'Relationship Focus';
+        if (this.canvasFocusDetails) this.canvasFocusDetails.textContent = focus.details || '';
+      } else {
+        if (this.canvasFocusBanner) this.canvasFocusBanner.style.display = 'none';
       }
     };
 
@@ -525,6 +564,43 @@ class NetworkClusterApp {
       });
     }
 
+    // Relationships & Correlation Explorer triggers
+    if (this.btnOpenRelationships) {
+      this.btnOpenRelationships.addEventListener('click', () => this.openRelationshipsDrawer());
+    }
+    this.btnSidebarRelationships?.addEventListener('click', () => this.openRelationshipsDrawer());
+    this.btnCloseRelDrawer?.addEventListener('click', () => this.closeRelationshipsDrawer());
+    this.relDrawerBackdrop?.addEventListener('click', () => this.closeRelationshipsDrawer());
+
+    // Floating Canvas Focus clear button
+    this.btnClearCanvasFocus?.addEventListener('click', () => {
+      this.chart.clearFocusRelationship();
+    });
+
+    // Relationship Explorer Tabs
+    const relTabs = [
+      { btn: this.tabRelMesh, tab: 'mesh' },
+      { btn: this.tabRelDomains, tab: 'domains' },
+      { btn: this.tabRelProtocols, tab: 'protocols' }
+    ];
+    relTabs.forEach(({ btn, tab }) => {
+      if (btn) {
+        btn.addEventListener('click', () => {
+          relTabs.forEach(t => t.btn?.classList.remove('active'));
+          btn.classList.add('active');
+          this.currentRelTab = tab;
+          this.renderRelationships();
+        });
+      }
+    });
+
+    if (this.relSearchInput) {
+      this.relSearchInput.addEventListener('input', (e) => {
+        this.relSearchQuery = e.target.value.toLowerCase().trim();
+        this.renderRelationships();
+      });
+    }
+
     // Timeline Scrubber Controls
     this.btnTimelineStepBack?.addEventListener('click', () => this.stepTimeline(-1));
     this.btnTimelineStepFwd?.addEventListener('click', () => this.stepTimeline(1));
@@ -645,6 +721,11 @@ class NetworkClusterApp {
       }
       if (this.inspectorDrawer?.classList.contains('open')) {
         this.renderSocketInspector();
+      }
+      if (realData.relationships) {
+        this.updateRelationshipsData(realData.relationships);
+      } else if (this.relDrawer?.classList.contains('open')) {
+        this.renderRelationships();
       }
       if (!this.lastHistoryLogTime || now - this.lastHistoryLogTime >= 8000) {
         this.lastHistoryLogTime = now;
@@ -1141,6 +1222,24 @@ class NetworkClusterApp {
       this.inspectorTitle.textContent = `Host Sockets: ${filterValue}`;
       this.inspectorSubtitle.textContent = `Kernel sockets communicating with IP host ${filterValue}`;
       if (this.btnFilterChartToSelection) this.btnFilterChartToSelection.style.display = 'none';
+    } else if (filterType === 'pair' && filterValue) {
+      this.inspectorTitle.textContent = `Internal Peer Pair: ${filterValue.hostA} ↔ ${filterValue.hostB}`;
+      this.inspectorSubtitle.textContent = `Kernel sockets and lateral flows exchanged directly between ${filterValue.hostA} and ${filterValue.hostB}`;
+      if (this.btnFilterChartToSelection) this.btnFilterChartToSelection.style.display = 'none';
+    } else if (filterType === 'domain' && filterValue) {
+      const gKey = filterValue.groupKey || filterValue;
+      this.inspectorTitle.textContent = `Shared Target: ${gKey}`;
+      this.inspectorSubtitle.textContent = `Kernel sockets connected to external target ${gKey} (${filterValue.org || filterValue.country || 'Public'})`;
+      if (this.btnFilterChartToSelection) this.btnFilterChartToSelection.style.display = 'none';
+    } else if (filterType === 'proto' && filterValue) {
+      const sName = filterValue.service || 'Protocol';
+      const sPort = filterValue.port || '';
+      this.inspectorTitle.textContent = `Protocol: ${sName} (:${sPort} • ${filterValue.proto || 'TCP'})`;
+      this.inspectorSubtitle.textContent = `Sockets grouped under protocol service ${sName} on port :${sPort}`;
+      if (this.btnFilterChartToSelection && sPort) {
+        this.btnFilterChartToSelection.style.display = 'inline-flex';
+        this.btnFilterChartToSelection.textContent = `Filter Canvas to :${sPort}`;
+      }
     } else if (filterType === 'flow' || filterType === 'connection') {
       const conn = filterValue;
       this.inspectorTitle.textContent = `Flow: ${conn.srcIP} → ${conn.destIP}:${conn.destPort}`;
@@ -1186,6 +1285,32 @@ class NetworkClusterApp {
     if (this.inspectorFilter.type === 'ip') {
       const targetIp = String(this.inspectorFilter.value);
       sockets = sockets.filter(s => s.localIP === targetIp || s.peerIP === targetIp);
+    } else if (this.inspectorFilter.type === 'pair' && this.inspectorFilter.value) {
+      const { hostA, hostB } = this.inspectorFilter.value;
+      sockets = sockets.filter(s =>
+        (s.localIP === hostA && s.peerIP === hostB) ||
+        (s.localIP === hostB && s.peerIP === hostA) ||
+        ((s.localIP === hostA || s.localIP === hostB) && (s.peerIP === hostA || s.peerIP === hostB))
+      );
+    } else if (this.inspectorFilter.type === 'domain' && this.inspectorFilter.value) {
+      const val = this.inspectorFilter.value;
+      const destIps = new Set(val.destinationIPs || [val]);
+      const groupKey = (val.groupKey || String(val)).toLowerCase();
+      sockets = sockets.filter(s => {
+        if (destIps.has(s.peerIP) || destIps.has(s.localIP)) return true;
+        if (s.dnsName && s.dnsName.toLowerCase().includes(groupKey)) return true;
+        if (s.geo?.org && s.geo.org.toLowerCase().includes(groupKey)) return true;
+        return false;
+      });
+    } else if (this.inspectorFilter.type === 'proto' && this.inspectorFilter.value) {
+      const val = this.inspectorFilter.value;
+      const port = typeof val === 'object' ? val.port : parseInt(val, 10);
+      const service = typeof val === 'object' ? (val.service || '').toLowerCase() : '';
+      sockets = sockets.filter(s => {
+        if (port && (s.peerPort === port || s.localPort === port)) return true;
+        if (service && s.service && s.service.toLowerCase() === service) return true;
+        return false;
+      });
     } else if ((this.inspectorFilter.type === 'flow' || this.inspectorFilter.type === 'connection') && this.inspectorFilter.value) {
       const conn = this.inspectorFilter.value;
       const sPort = parseInt(conn.destPort, 10);
@@ -1330,6 +1455,310 @@ class NetworkClusterApp {
     });
 
     this.inspectorTableBody.innerHTML = rows;
+  }
+
+  // ==========================================================================
+  // Network Relationships & Correlation Explorer
+  // ==========================================================================
+  async openRelationshipsDrawer() {
+    if (this.relDrawer) this.relDrawer.classList.add('open');
+    if (this.relDrawerBackdrop) this.relDrawerBackdrop.classList.add('open');
+
+    if (!this.relationshipsData) {
+      try {
+        const res = await fetch('/api/relationships');
+        if (res.ok) {
+          const data = await res.json();
+          this.updateRelationshipsData(data);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch relationships API:', err);
+      }
+    }
+    this.renderRelationships();
+  }
+
+  closeRelationshipsDrawer() {
+    if (this.relDrawer) this.relDrawer.classList.remove('open');
+    if (this.relDrawerBackdrop) this.relDrawerBackdrop.classList.remove('open');
+  }
+
+  updateRelationshipsData(relData) {
+    if (!relData) return;
+    this.relationshipsData = relData;
+
+    const meshCount = relData.internalMesh?.length || 0;
+    const domainCount = relData.sharedDestinations?.length || 0;
+    const protoCount = relData.commonProtocols?.length || 0;
+    const totalRel = meshCount + domainCount;
+
+    if (this.headerRelCount) {
+      this.headerRelCount.textContent = totalRel;
+    }
+
+    if (this.relKpiMeshVal) this.relKpiMeshVal.textContent = meshCount;
+    if (this.relKpiDomainsVal) this.relKpiDomainsVal.textContent = domainCount;
+    if (this.relKpiProtosVal) this.relKpiProtosVal.textContent = protoCount;
+    if (this.relKpiTopVal) {
+      this.relKpiTopVal.textContent = relData.summary?.topInternalPair || (meshCount > 0 ? `${relData.internalMesh[0].hostA} ↔ ${relData.internalMesh[0].hostB}` : '--');
+    }
+
+    if (this.countTabMesh) this.countTabMesh.textContent = meshCount;
+    if (this.countTabDomains) this.countTabDomains.textContent = domainCount;
+    if (this.countTabProtocols) this.countTabProtocols.textContent = protoCount;
+
+    if (this.relDrawer?.classList.contains('open')) {
+      this.renderRelationships();
+    }
+  }
+
+  renderRelationships() {
+    if (!this.relContentScroll) return;
+    const data = this.relationshipsData;
+    if (!data) {
+      this.relContentScroll.innerHTML = `
+        <div class="rel-empty-msg">
+          <p>Analyzing live packet and socket telemetry for relational patterns...</p>
+        </div>
+      `;
+      return;
+    }
+
+    const tab = this.currentRelTab || 'mesh';
+    const q = (this.relSearchQuery || '').toLowerCase();
+    let cardsHtml = '';
+
+    if (tab === 'mesh') {
+      const items = (data.internalMesh || []).filter(item => {
+        if (!q) return true;
+        const text = `${item.hostA} ${item.hostB} ${item.hostAName || ''} ${item.hostBName || ''} ${(item.services || []).join(' ')} ${(item.protocols || []).join(' ')} ${(item.ports || []).join(' ')} ${(item.processes || []).join(' ')}`.toLowerCase();
+        return text.includes(q);
+      });
+
+      if (items.length === 0) {
+        cardsHtml = `<div class="rel-empty-msg">No internal host mesh pairs matching current filters.</div>`;
+      } else {
+        cardsHtml = items.map((item, idx) => {
+          const portsStr = (item.ports || []).map(p => `<span class="rel-chip">:${p}</span>`).join('');
+          const servicesStr = (item.services || []).map(s => `<span class="rel-chip" style="color:#38bdf8;border-color:rgba(56,189,248,0.25);">${s}</span>`).join('');
+          const protosStr = (item.protocols || []).map(pr => `<span class="rel-chip" style="color:#34d399;">${pr}</span>`).join('');
+          const procsStr = (item.processes || []).map(proc => `<span class="rel-chip" style="color:#a78bfa;">⚙ ${proc}</span>`).join('');
+          const latencyStr = item.avgLatencyMs !== null && item.avgLatencyMs !== undefined ? `${item.avgLatencyMs} ms` : '< 1 ms';
+
+          return `
+            <div class="rel-card" data-id="${item.id}">
+              <div class="rel-card-header">
+                <div class="rel-card-title">
+                  <span style="color:var(--accent-cyan);">🔗</span>
+                  <span>${item.hostAName || item.hostA}</span>
+                  <span style="color:var(--text-muted);font-weight:400;margin:0 2px;">↔</span>
+                  <span>${item.hostBName || item.hostB}</span>
+                </div>
+                <div class="rel-card-actions">
+                  <button class="rel-btn-focus" data-action="focus-mesh" data-index="${idx}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+                    Focus Canvas
+                  </button>
+                  <button class="rel-btn-inspect" data-action="inspect-mesh" data-index="${idx}">
+                    Inspect Sockets
+                  </button>
+                </div>
+              </div>
+              <div class="rel-card-meta">
+                <span>Active Sockets: <strong>${item.connectionCount}</strong></span>
+                <span>Throughput: <strong>${(item.totalThroughputKbps || 0).toFixed(1)}</strong> KB/s</span>
+                <span>Latency: <strong>${latencyStr}</strong></span>
+              </div>
+              <div class="rel-card-pills">
+                ${servicesStr}
+                ${portsStr}
+                ${protosStr}
+                ${procsStr}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+    } else if (tab === 'domains') {
+      const items = (data.sharedDestinations || []).filter(item => {
+        if (!q) return true;
+        const text = `${item.groupKey} ${item.primaryHost || ''} ${item.org || ''} ${item.country || ''} ${(item.clientIPs || []).join(' ')} ${(item.destinationIPs || []).join(' ')} ${(item.services || []).join(' ')} ${(item.ports || []).join(' ')}`.toLowerCase();
+        return text.includes(q);
+      });
+
+      if (items.length === 0) {
+        cardsHtml = `<div class="rel-empty-msg">No shared external destinations matching current filters.</div>`;
+      } else {
+        cardsHtml = items.map((item, idx) => {
+          const clientPills = (item.clientIPs || []).map(c => `<span class="rel-chip" style="color:#67e8f9;border-color:rgba(103,232,249,0.25);">Client: ${c}</span>`).join('');
+          const destPills = (item.destinationIPs || []).map(d => `<span class="rel-chip" style="color:#94a3b8;">IP: ${d}</span>`).join('');
+          const servicesStr = (item.services || []).map(s => `<span class="rel-chip" style="color:#38bdf8;">${s}</span>`).join('');
+          const portsStr = (item.ports || []).map(p => `<span class="rel-chip">:${p}</span>`).join('');
+
+          return `
+            <div class="rel-card" data-id="${item.id}">
+              <div class="rel-card-header">
+                <div class="rel-card-title">
+                  <span>${item.flag || '🌐'}</span>
+                  <span>${item.groupKey}</span>
+                  ${item.org && item.org !== 'Public Host' ? `<span style="font-size:0.72rem;color:var(--text-muted);font-weight:400;">(${item.org})</span>` : ''}
+                </div>
+                <div class="rel-card-actions">
+                  <button class="rel-btn-focus" data-action="focus-domain" data-index="${idx}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+                    Focus Canvas
+                  </button>
+                  <button class="rel-btn-inspect" data-action="inspect-domain" data-index="${idx}">
+                    Inspect Sockets
+                  </button>
+                </div>
+              </div>
+              <div class="rel-card-meta">
+                <span>Shared by <strong>${item.clientCount}</strong> client(s)</span>
+                <span>Active Sockets: <strong>${item.connectionCount}</strong></span>
+                <span>Throughput: <strong>${(item.totalThroughputKbps || 0).toFixed(1)}</strong> KB/s</span>
+                ${item.avgLatencyMs !== null && item.avgLatencyMs !== undefined ? `<span>RTT: <strong>${item.avgLatencyMs} ms</strong></span>` : ''}
+              </div>
+              <div class="rel-card-pills">
+                ${clientPills}
+                ${destPills}
+                ${servicesStr}
+                ${portsStr}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+    } else if (tab === 'protocols') {
+      const items = (data.commonProtocols || []).filter(item => {
+        if (!q) return true;
+        const text = `${item.service} ${item.port} ${item.proto} ${item.category || ''} ${(item.clients || []).join(' ')} ${(item.destinations || []).join(' ')}`.toLowerCase();
+        return text.includes(q);
+      });
+
+      if (items.length === 0) {
+        cardsHtml = `<div class="rel-empty-msg">No protocol clusters matching current filters.</div>`;
+      } else {
+        cardsHtml = items.map((item, idx) => {
+          const clientPills = (item.clients || []).slice(0, 4).map(c => `<span class="rel-chip" style="color:#67e8f9;">Client: ${c}</span>`).join('');
+          const moreClients = (item.clients || []).length > 4 ? `<span class="rel-chip">+${item.clients.length - 4} clients</span>` : '';
+          const destPills = (item.destinations || []).slice(0, 4).map(d => `<span class="rel-chip" style="color:#a5b4fc;">Server: ${d}</span>`).join('');
+          const moreDests = (item.destinations || []).length > 4 ? `<span class="rel-chip">+${item.destinations.length - 4} servers</span>` : '';
+
+          return `
+            <div class="rel-card" data-id="${item.id}">
+              <div class="rel-card-header">
+                <div class="rel-card-title">
+                  <span style="color:${item.color || '#38bdf8'};">⚡</span>
+                  <span>${item.service}</span>
+                  <span style="font-size:0.75rem;color:var(--text-muted);font-weight:400;">(:${item.port} • ${item.proto})</span>
+                </div>
+                <div class="rel-card-actions">
+                  <button class="rel-btn-focus" data-action="focus-proto" data-index="${idx}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+                    Focus Canvas
+                  </button>
+                  <button class="rel-btn-inspect" data-action="inspect-proto" data-index="${idx}">
+                    Inspect Sockets
+                  </button>
+                </div>
+              </div>
+              <div class="rel-card-meta">
+                <span>Clients: <strong>${item.clientCount}</strong></span>
+                <span>Destinations: <strong>${item.destinationCount}</strong></span>
+                <span>Active Sockets: <strong>${item.connectionCount}</strong></span>
+                <span>Throughput: <strong>${(item.totalThroughputKbps || 0).toFixed(1)}</strong> KB/s</span>
+              </div>
+              <div class="rel-card-pills">
+                ${clientPills}
+                ${moreClients}
+                ${destPills}
+                ${moreDests}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    this.relContentScroll.innerHTML = cardsHtml;
+
+    // Attach click listeners to Focus and Inspect buttons
+    this.relContentScroll.querySelectorAll('button[data-action]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        const idx = parseInt(btn.dataset.index, 10);
+
+        if (action === 'focus-mesh') {
+          const item = (this.relationshipsData?.internalMesh || [])[idx];
+          if (!item) return;
+          const nodeKeys = new Set([item.hostA, item.hostB]);
+          this.chart.setFocusRelationship({
+            type: 'mesh',
+            title: `Internal Mesh: ${item.hostAName || item.hostA} ↔ ${item.hostBName || item.hostB}`,
+            details: `Direct lateral flow • ${item.connectionCount} active sockets • Ports: ${(item.ports || []).map(p => ':' + p).join(', ') || 'Various'}`,
+            nodeKeys: nodeKeys,
+            matchConn: (conn, animConn) => {
+              return (animConn.srcKey === item.hostA && animConn.destKey === item.hostB) ||
+                     (animConn.srcKey === item.hostB && animConn.destKey === item.hostA);
+            }
+          });
+          this.closeRelationshipsDrawer();
+          this.showToast('Relationship Focus Active', `Spotlight on ${item.hostAName || item.hostA} ↔ ${item.hostBName || item.hostB}. Press Esc to clear.`, 'info');
+        } else if (action === 'inspect-mesh') {
+          const item = (this.relationshipsData?.internalMesh || [])[idx];
+          if (!item) return;
+          this.closeRelationshipsDrawer();
+          this.openSocketInspector('pair', { hostA: item.hostA, hostB: item.hostB });
+        } else if (action === 'focus-domain') {
+          const item = (this.relationshipsData?.sharedDestinations || [])[idx];
+          if (!item) return;
+          const clientSet = new Set(item.clientIPs || []);
+          const destSet = new Set(item.destinationIPs || []);
+          const nodeKeys = new Set([...clientSet, ...destSet]);
+          this.chart.setFocusRelationship({
+            type: 'domain',
+            title: `Shared Target: ${item.groupKey} (${item.org || item.country || 'External'})`,
+            details: `Accessed by ${item.clientCount} internal host(s) • ${item.connectionCount} sockets • ${(item.totalThroughputKbps || 0).toFixed(1)} KB/s`,
+            nodeKeys: nodeKeys,
+            matchConn: (conn, animConn) => {
+              return (clientSet.has(animConn.srcKey) && destSet.has(animConn.destKey)) ||
+                     (destSet.has(animConn.srcKey) && clientSet.has(animConn.destKey));
+            }
+          });
+          this.closeRelationshipsDrawer();
+          this.showToast('Relationship Focus Active', `Spotlight on shared domain ${item.groupKey}. Press Esc to clear.`, 'info');
+        } else if (action === 'inspect-domain') {
+          const item = (this.relationshipsData?.sharedDestinations || [])[idx];
+          if (!item) return;
+          this.closeRelationshipsDrawer();
+          this.openSocketInspector('domain', item);
+        } else if (action === 'focus-proto') {
+          const item = (this.relationshipsData?.commonProtocols || [])[idx];
+          if (!item) return;
+          const nodeKeys = new Set([...(item.clients || []), ...(item.destinations || [])]);
+          this.chart.setFocusRelationship({
+            type: 'proto',
+            title: `Protocol Affinity: ${item.service} (Port :${item.port})`,
+            details: `${item.clientCount} clients • ${item.destinationCount} servers • ${item.connectionCount} active sockets`,
+            nodeKeys: nodeKeys,
+            matchConn: (conn, animConn) => {
+              return conn.destPort === item.port || (conn.service && conn.service.toLowerCase() === item.service.toLowerCase());
+            }
+          });
+          this.closeRelationshipsDrawer();
+          this.showToast('Relationship Focus Active', `Spotlight on protocol ${item.service} (:${item.port}). Press Esc to clear.`, 'info');
+        } else if (action === 'inspect-proto') {
+          const item = (this.relationshipsData?.commonProtocols || [])[idx];
+          if (!item) return;
+          this.closeRelationshipsDrawer();
+          this.openSocketInspector('proto', item);
+        }
+      });
+    });
   }
 
   // ==========================================================================
@@ -1502,6 +1931,9 @@ class NetworkClusterApp {
 
     if (this.inspectorDrawer?.classList.contains('open')) {
       this.renderSocketInspector();
+    }
+    if (topology.relationships) {
+      this.updateRelationshipsData(topology.relationships);
     }
   }
 

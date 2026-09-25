@@ -36,7 +36,7 @@ def background_history_recorder():
             time.sleep(5.0)
             now = time.time()
             if now - last_db_record_time >= 4.5:
-                topo = collector.get_topology(scope='all', target_k=4, resolve_dns=False, resolve_geoip=True)
+                topo = collector.get_topology(scope='all', target_k=4, resolve_dns=True, resolve_geoip=True)
                 if topo and topo.get('nodes'):
                     db.record_snapshot(topo)
                     last_db_record_time = now
@@ -52,8 +52,10 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
     """Handles both static dashboard files and live network telemetry API requests."""
 
     def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
         if self.path.startswith('/api/'):
-            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
         super().end_headers()
@@ -84,7 +86,7 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             scope = params.get('scope', ['all'])[0]
             k_val = params.get('k', ['4'])[0]
             target_k = int(k_val) if k_val.isdigit() else 4
-            resolve_dns = params.get('resolve_dns', ['false'])[0].lower() in ('true', '1', 'yes')
+            resolve_dns = params.get('resolve_dns', ['true'])[0].lower() in ('true', '1', 'yes')
             resolve_geoip = params.get('resolve_geoip', ['true'])[0].lower() in ('true', '1', 'yes')
 
             data = collector.get_topology(scope=scope, target_k=target_k, resolve_dns=resolve_dns, resolve_geoip=resolve_geoip)
@@ -148,8 +150,50 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json_response({'status': 'scanning', 'message': 'LAN subnet ping sweep started'})
             return
 
-        # Serve static dashboard files
+        elif parsed.path == '/api/relationships':
+            data = collector.get_topology(scope='all', target_k=4, resolve_dns=True, resolve_geoip=True)
+            self.send_json_response({
+                'status': 'ok',
+                'relationships': data.get('relationships', {}),
+                'meta': data.get('meta', {})
+            })
+            return
+
+        # Static file mapping: serve directly with 200 OK and strict no-cache headers
+        # to ensure the browser never receives a stale 304 Not Modified response.
+        STATIC_FILE_MAP = {
+            '/': ('index.html', 'text/html; charset=utf-8'),
+            '/index.html': ('index.html', 'text/html; charset=utf-8'),
+            '/styles.css': ('styles.css', 'text/css; charset=utf-8'),
+            '/app.js': ('app.js', 'application/javascript; charset=utf-8'),
+            '/chart.js': ('chart.js', 'application/javascript; charset=utf-8'),
+            '/kmeans.js': ('kmeans.js', 'application/javascript; charset=utf-8'),
+        }
+
+        clean_path = parsed.path
+        if clean_path in STATIC_FILE_MAP:
+            filename, content_type = STATIC_FILE_MAP[clean_path]
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            file_path = os.path.join(base_dir, filename)
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, 'rb') as f:
+                        content = f.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', content_type)
+                    self.send_header('Content-Length', str(len(content)))
+                    self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                    self.send_header('Pragma', 'no-cache')
+                    self.send_header('Expires', '0')
+                    self.end_headers()
+                    self.wfile.write(content)
+                    return
+                except Exception as e:
+                    print(f"[serve.py] Error reading static file {filename}: {e}")
+
+        # Fallback to standard handler for any other requests
         super().do_GET()
+
 
 
 def is_port_in_use(port: int) -> bool:
@@ -161,6 +205,15 @@ def kill_process_on_port(port: int):
     """Detect and terminate any existing process holding the given port."""
     my_pid = os.getpid()
     pids = set()
+
+    # Try pgrep for existing serve.py processes
+    try:
+        out = subprocess.check_output(["pgrep", "-f", "serve.py"], stderr=subprocess.DEVNULL).decode().strip()
+        for p in out.split():
+            if p.isdigit() and int(p) != my_pid:
+                pids.add(int(p))
+    except Exception:
+        pass
 
     # Try lsof
     try:
@@ -227,43 +280,39 @@ def wait_for_server(port: int, max_retries: int = 50, delay: float = 0.05) -> bo
 
 def open_browser(url: str, port: int):
     """Open default web browser directly to url after server has started and is listening."""
+    if os.environ.get("NO_BROWSER", "").lower() in ("1", "true", "yes"):
+        return
+    if "--no-browser" in sys.argv:
+        return
+
     # Ensure server is fully listening before launching browser
     if not wait_for_server(port, max_retries=60, delay=0.05):
-        print(f"[serve.py] Warning: Server not responding yet on port {port}, attempting browser launch anyway...")
-    else:
-        time.sleep(0.1)
+        print(f"[serve.py] Warning: Server not responding yet on port {port}")
+        return
 
     print(f"[serve.py] Opening web browser to: {url}")
 
-    # Prioritize browsers that accept URL arguments directly
-    candidates = [
-        ["/snap/bin/chromium", url],
-        ["chromium", url],
-        ["google-chrome", url],
-        ["firefox", url],
-        ["xdg-open", url],
-        ["gio", "open", url],
-    ]
-
-    for cmd in candidates:
-        try:
-            bin_path = subprocess.check_output(["which", cmd[0]], stderr=subprocess.DEVNULL).decode().strip()
-            if bin_path:
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return
-        except Exception:
-            continue
+    # Use xdg-open via desktop session so it opens in user's active browser
+    try:
+        if subprocess.call(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0:
+            return
+    except Exception:
+        pass
 
     # Fallback to python webbrowser module
     try:
-        if not webbrowser.open(url):
-            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        webbrowser.open(url)
     except Exception as e:
         print(f"[serve.py] Could not open browser automatically: {e}")
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else DEFAULT_PORT
+    port = DEFAULT_PORT
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            port = int(arg)
+            break
+
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     if is_port_in_use(port):
@@ -271,14 +320,49 @@ def main():
 
     url = f"http://localhost:{port}/index.html"
 
-    threading.Thread(target=open_browser, args=(url, port), daemon=True).start()
+    # Browser opening is opt-in via --open or -o flag so that unwanted blank snap Chromium windows are never launched
+    auto_open = ("--open" in sys.argv or "-o" in sys.argv)
+    if auto_open:
+        threading.Thread(target=open_browser, args=(url, port), daemon=True).start()
+    else:
+        print(f"[serve.py] Dashboard ready at: {url}")
 
-    # Use ThreadingHTTPServer to handle static files and concurrent telemetry requests smoothly
-    ServerClass = getattr(http.server, 'ThreadingHTTPServer', socketserver.ThreadingTCPServer)
-    ServerClass.allow_reuse_address = True
+    BaseServerClass = getattr(http.server, 'ThreadingHTTPServer', socketserver.ThreadingTCPServer)
+
+    class ReusableThreadingServer(BaseServerClass):
+        allow_reuse_address = True
+        daemon_threads = True
+
+        def server_bind(self):
+            try:
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_REUSEPORT'):
+                    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except Exception:
+                pass
+            super().server_bind()
+
+    # Retry bind if port is briefly in TIME_WAIT or clearing
+    max_bind_attempts = 5
+    httpd = None
+    for attempt in range(max_bind_attempts):
+        try:
+            httpd = ReusableThreadingServer(("", port), NetworkMonitorHTTPHandler)
+            break
+        except OSError as e:
+            if getattr(e, 'errno', None) == 98 and attempt < max_bind_attempts - 1:
+                kill_process_on_port(port)
+                time.sleep(0.5)
+            else:
+                print(f"\n[serve.py] Error starting server on port {port}: {e}")
+                print(f"[serve.py] Port {port} is in use. Run:")
+                print(f"    sudo fuser -k -9 {port}/tcp")
+                print(f"or launch with an alternate port:")
+                print(f"    python3 serve.py 8081\n")
+                sys.exit(1)
 
     try:
-        with ServerClass(("", port), NetworkMonitorHTTPHandler) as httpd:
+        with httpd:
             print(f"[serve.py] Serving Network Monitor with Live Telemetry API on http://0.0.0.0:{port} ...")
             print(f"[serve.py] Open dashboard in browser: {url}")
             print(f"[serve.py] Telemetry API: http://localhost:{port}/api/network-telemetry")
@@ -287,7 +371,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[serve.py] Shutting down server.")
     except Exception as e:
-        print(f"[serve.py] Error starting server: {e}")
+        print(f"[serve.py] Server error: {e}")
         sys.exit(1)
 
 

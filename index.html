@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260925_rel">
 </head>
 <body>
 
@@ -60,14 +60,18 @@
         </div>
       </div>
 
-      <!-- Quick Action Buttons: Alert Center & Deep Socket Inspector -->
+      <!-- Quick Action Buttons: Relationships Explorer, Deep Socket Inspector & Alert Center -->
       <div class="header-action-group">
-        <button class="header-action-btn alert-bell-btn" id="btnToggleAlerts" title="Threshold Alert Center">
+        <button class="header-action-btn relationships-btn" id="btnOpenRelationships" title="Network Relationship &amp; Correlation Explorer">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+            <circle cx="18" cy="5" r="3"></circle>
+            <circle cx="6" cy="12" r="3"></circle>
+            <circle cx="18" cy="19" r="3"></circle>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
           </svg>
-          <span class="alert-count-pill" id="headerAlertCount">0</span>
+          <span>Relationships</span>
+          <span class="alert-count-pill" id="headerRelCount" style="background: rgba(6, 182, 212, 0.2); color: var(--accent-cyan); border-color: rgba(6, 182, 212, 0.35);">0</span>
         </button>
 
         <button class="header-action-btn inspector-btn" id="btnOpenInspector" title="Open Deep Socket &amp; Protocol Inspector">
@@ -77,9 +81,18 @@
           </svg>
           <span>Socket Inspector</span>
         </button>
+
+        <button class="header-action-btn alert-bell-btn" id="btnToggleAlerts" title="Threshold Alert Center">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
+          <span class="alert-count-pill" id="headerAlertCount">0</span>
+        </button>
       </div>
     </div>
   </header>
+
 
   <!-- Main Application Layout -->
   <main class="app-container" id="mainContainer">
@@ -174,9 +187,16 @@
       </div>
 
       <div style="display: flex; gap: 6px; margin-bottom: 0.85rem;">
-        <button class="btn btn-secondary" id="btnScanLan" style="flex: 1; font-size: 0.76rem; padding: 0.45rem 0.6rem; border-color: rgba(16, 185, 129, 0.3);" title="Ping local /24 subnet to discover new LAN devices">
+        <button class="btn btn-secondary" id="btnScanLan" style="flex: 1; font-size: 0.76rem; padding: 0.45rem 0.5rem; border-color: rgba(16, 185, 129, 0.3);" title="Ping local /24 subnet to discover new LAN devices">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 6a6 6 0 0 1 6 6"/><circle cx="12" cy="12" r="2"/></svg>
-          <span style="color: #34d399;">Scan LAN Subnet</span>
+          <span style="color: #34d399;">Scan LAN</span>
+        </button>
+        <button class="btn btn-secondary" id="btnSidebarRelationships" style="flex: 1.1; font-size: 0.76rem; padding: 0.45rem 0.5rem; border-color: rgba(6, 182, 212, 0.4); background: rgba(6, 182, 212, 0.1);" title="Network Relationships & Correlation Explorer">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+            <circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+          </svg>
+          <span style="color: var(--accent-cyan); font-weight: 600;">Relationships</span>
         </button>
       </div>
 
@@ -259,7 +279,7 @@
         <label class="toggle-item" for="toggleDnsLookup" title="Perform real reverse DNS (PTR) lookups for network IP hosts">
           <span class="toggle-label">Resolve DNS (PTR)</span>
           <div class="toggle-switch">
-            <input type="checkbox" id="toggleDnsLookup">
+            <input type="checkbox" id="toggleDnsLookup" checked>
             <span class="slider-switch"></span>
           </div>
         </label>
@@ -329,7 +349,18 @@
       <div class="canvas-container" id="canvasContainer">
         <canvas id="clusterCanvas"></canvas>
 
+        <!-- Floating Canvas Relationship Focus HUD -->
+        <div class="canvas-focus-banner" id="canvasFocusBanner" style="display: none;">
+          <div class="focus-banner-content">
+            <span class="focus-badge">RELATIONSHIP FOCUS</span>
+            <span class="focus-title" id="canvasFocusTitle">--</span>
+            <span class="focus-details" id="canvasFocusDetails">--</span>
+            <button class="focus-clear-btn" id="btnClearCanvasFocus" title="Clear relationship focus (Esc)">✕ Clear Filter</button>
+          </div>
+        </div>
+
         <!-- Floating Zoom & Pan Controls HUD -->
+
         <div class="canvas-zoom-toolbar" id="canvasZoomToolbar" role="toolbar" aria-label="Canvas zoom controls">
           <button class="zoom-btn" id="btnZoomIn" title="Zoom In (+ or Mouse Wheel Up)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
@@ -647,7 +678,73 @@
     </div>
   </aside>
 
+  <!-- Network Relationships & Correlation Explorer Drawer -->
+  <div class="inspector-drawer-backdrop" id="relDrawerBackdrop"></div>
+  <aside class="inspector-drawer rel-drawer" id="relDrawer">
+    <div class="inspector-header">
+      <div class="inspector-title-area">
+        <div class="inspector-badge" style="color: var(--accent-cyan);">
+          <span class="live-dot" style="background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan);"></span>
+          <span>RELATIONSHIP &amp; CORRELATION ENGINE</span>
+        </div>
+        <h3 id="relDrawerTitle">Network Traffic Relationships</h3>
+        <p id="relDrawerSubtitle">Direct internal device mesh, common external URLs &amp; domains, and shared protocols</p>
+      </div>
+      <div class="inspector-header-actions">
+        <button class="inspector-close-btn" id="btnCloseRelDrawer" title="Close Relationships Explorer">✕</button>
+      </div>
+    </div>
+
+    <!-- Relationships Summary KPI Grid -->
+    <div class="rel-summary-grid">
+      <div class="rel-kpi-card" id="relKpiMesh">
+        <span class="rel-kpi-val" id="relKpiMeshVal">0</span>
+        <span class="rel-kpi-label">Internal Peer Links</span>
+      </div>
+      <div class="rel-kpi-card" id="relKpiDomains">
+        <span class="rel-kpi-val highlight-cyan" id="relKpiDomainsVal">0</span>
+        <span class="rel-kpi-label">Shared External Targets</span>
+      </div>
+      <div class="rel-kpi-card" id="relKpiProtos">
+        <span class="rel-kpi-val highlight-emerald" id="relKpiProtosVal">0</span>
+        <span class="rel-kpi-label">Active Protocols</span>
+      </div>
+      <div class="rel-kpi-card" id="relKpiTop">
+        <span class="rel-kpi-val highlight-amber" id="relKpiTopVal" style="font-size:0.78rem; font-family:var(--font-mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">--</span>
+        <span class="rel-kpi-label">Top Internal Pair</span>
+      </div>
+    </div>
+
+    <!-- Tabs & Filter Bar -->
+    <div class="rel-nav-bar">
+      <div class="rel-tabs">
+        <button class="rel-tab-btn active" data-tab="mesh" id="tabRelMesh">
+          🏠 Internal Mesh (<span id="countTabMesh">0</span>)
+        </button>
+        <button class="rel-tab-btn" data-tab="domains" id="tabRelDomains">
+          🌐 Common URLs &amp; Domains (<span id="countTabDomains">0</span>)
+        </button>
+        <button class="rel-tab-btn" data-tab="protocols" id="tabRelProtocols">
+          ⚡ Protocol Affinity (<span id="countTabProtocols">0</span>)
+        </button>
+      </div>
+      <div class="rel-search-wrap">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="relSearchInput" placeholder="Filter relationships by host, domain, port, service...">
+      </div>
+    </div>
+
+    <!-- Scrollable Relationship Cards Container -->
+    <div class="rel-content-scroll" id="relContentScroll">
+      <!-- Dynamically populated -->
+    </div>
+  </aside>
+
   <!-- Alerts Drawer -->
+
   <div class="alerts-drawer-backdrop" id="alertsBackdrop"></div>
   <aside class="alerts-drawer" id="alertsDrawer">
     <div class="alerts-header">
@@ -669,6 +766,6 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Application Logic Modules -->
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=20260925_rel"></script>
 </body>
 </html>
