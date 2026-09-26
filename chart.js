@@ -107,6 +107,35 @@ export class NetworkClusterChart {
     }
   }
 
+  setFocusThreat(threat) {
+    if (!threat) {
+      this.clearFocusRelationship();
+      return;
+    }
+    const srcKey = threat.srcIP || threat.srcIp;
+    const destKey = threat.destIP || threat.destIp;
+    const nodeKeys = new Set([srcKey, destKey].filter(Boolean));
+    const title = `🚨 THREAT: ${threat.signature || 'Exploit Vector'}`;
+    const details = `${srcKey} ➔ ${destKey}${threat.destPort ? ':' + threat.destPort : ''} • ${(threat.category || 'Exploit').toUpperCase()} • Severity: ${(threat.severity || 'CRITICAL').toUpperCase()}`;
+    this.focusFilter = {
+      type: 'threat',
+      threat: threat,
+      name: threat.signature,
+      title: title,
+      details: details,
+      nodeKeys: nodeKeys,
+      matchConn: (conn) => {
+        return (
+          (conn.srcIP === srcKey && conn.destIP === destKey && (!threat.destPort || String(conn.destPort) === String(threat.destPort))) ||
+          (conn.srcIP === destKey && conn.destIP === srcKey)
+        );
+      }
+    };
+    if (this.onFocusChange) {
+      this.onFocusChange(this.focusFilter);
+    }
+  }
+
 
   resize() {
     const rect = this.canvas.getBoundingClientRect();
@@ -781,7 +810,24 @@ export class NetworkClusterChart {
         `;
       }
 
+      let threatNoticeHtml = '';
+      if (node.hasThreat) {
+        const sev = (node.threatSeverity || 'critical').toUpperCase();
+        const sevColor = sev === 'CRITICAL' ? '#ef4444' : sev === 'HIGH' ? '#f97316' : '#eab308';
+        threatNoticeHtml = `
+          <div style="background:rgba(239,68,68,0.18);border:1px solid ${sevColor};border-radius:6px;padding:6px 8px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="color:${sevColor};font-weight:700;font-size:11px;">⚠️ ACTIVE THREAT ALERT</span>
+              <span style="background:${sevColor};color:#ffffff;font-size:9px;font-weight:800;padding:1px 5px;border-radius:3px;">${sev}</span>
+            </div>
+            <div style="color:#ffffff;font-size:11px;font-weight:600;margin-top:2px;">${node.threatSignature || 'Exploit / C2 Detected'}</div>
+            <div style="color:#fca5a5;font-size:10px;margin-top:1px;">Category: ${(node.threatCategory || 'Exploit').toUpperCase()}</div>
+          </div>
+        `;
+      }
+
       this.tooltip.innerHTML = `
+        ${threatNoticeHtml}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:5px;gap:8px;">
           <div style="font-weight:700;color:${color.main};font-family:monospace;font-size:13px;">
             ${node.ip}
@@ -869,10 +915,25 @@ export class NetworkClusterChart {
           ? `${(conn.throughputKbps / 1000).toFixed(2)} Mbps`
           : `${conn.throughputKbps || 0} Kbps`;
 
+      let threatConnNoticeHtml = '';
+      if (conn.hasThreat) {
+        const sev = (conn.threatSeverity || 'critical').toUpperCase();
+        threatConnNoticeHtml = `
+          <div style="background:rgba(239,68,68,0.22);border:1px solid #ef4444;border-radius:6px;padding:6px 8px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="color:#fca5a5;font-weight:700;font-size:11px;">🚨 ACTIVE EXPLOIT VECTOR</span>
+              <span style="background:#ef4444;color:#fff;font-size:9px;font-weight:800;padding:1px 5px;border-radius:3px;">${sev}</span>
+            </div>
+            <div style="color:#ffffff;font-size:11px;font-weight:600;margin-top:2px;">${conn.threatSignature || 'Exploit Signature'}</div>
+          </div>
+        `;
+      }
+
       this.tooltip.innerHTML = `
+        ${threatConnNoticeHtml}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:5px;gap:8px;">
-          <div style="font-weight:700;color:${color};font-family:monospace;font-size:12.5px;">
-            ⚡ Network Socket Flow
+          <div style="font-weight:700;color:${conn.hasThreat ? '#ef4444' : color};font-family:monospace;font-size:12.5px;">
+            ${conn.hasThreat ? '⚠️ Suspicious Network Flow' : '⚡ Network Socket Flow'}
           </div>
           ${typeBadge}
         </div>
@@ -1288,12 +1349,19 @@ export class NetworkClusterChart {
         ctx.globalAlpha = isDirectlyHovered ? 1.0 : (hasHover && !isConnectedToHovered ? combinedAlpha * 0.22 : combinedAlpha);
       }
 
+      const isThreatConn = conn.hasThreat || (hasFocus && this.focusFilter?.type === 'threat' && isFocusMatched);
+
       // Draw connection line
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
 
-      if (isDirectlyHovered || (hasFocus && isFocusMatched)) {
+      if (isThreatConn) {
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = isDirectlyHovered ? 4.2 : 3.0 + Math.sin(this.pulsePhase * 4) * 0.8;
+        ctx.shadowColor = '#ef4444';
+        ctx.shadowBlur = 16 + Math.sin(this.pulsePhase * 4) * 6;
+      } else if (isDirectlyHovered || (hasFocus && isFocusMatched)) {
         ctx.strokeStyle = conn.color || '#38bdf8';
         ctx.lineWidth = isDirectlyHovered ? 3.8 : 2.6;
         ctx.shadowColor = conn.color || '#38bdf8';
@@ -1329,11 +1397,11 @@ export class NetworkClusterChart {
         const packetY = p1.y + (p2.y - p1.y) * t;
 
         ctx.beginPath();
-        const pSize = isDirectlyHovered ? 4.8 : isConnectedToHovered ? 3.5 : 2.0;
+        const pSize = isThreatConn ? 4.8 : (isDirectlyHovered ? 4.8 : isConnectedToHovered ? 3.5 : 2.0);
         ctx.arc(packetX, packetY, pSize, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = conn.color || '#38bdf8';
-        ctx.shadowBlur = isDirectlyHovered ? 14 : 6;
+        ctx.fillStyle = isThreatConn ? '#fca5a5' : '#ffffff';
+        ctx.shadowColor = isThreatConn ? '#ef4444' : (conn.color || '#38bdf8');
+        ctx.shadowBlur = isThreatConn ? 18 : (isDirectlyHovered ? 14 : 6);
         ctx.fill();
         ctx.shadowBlur = 0;
       }
@@ -1420,19 +1488,46 @@ export class NetworkClusterChart {
         ctx.stroke();
       }
 
+      // Threat & Exploit Hazard Beacon Halo
+      if (node.data.hasThreat) {
+        const sev = (node.data.threatSeverity || 'critical').toLowerCase();
+        const threatColor = sev === 'critical' ? '#ef4444' : sev === 'high' ? '#f97316' : '#eab308';
+        const haloPhase = (this.pulsePhase * 3.5) % (Math.PI * 2);
+        const haloR = radius + 6 + Math.sin(haloPhase) * 3;
+        const rippleR = radius + 9 + ((this.pulsePhase * 4) % 12);
+
+        // Expanding hazard ripple
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, rippleR, 0, Math.PI * 2);
+        ctx.strokeStyle = `${threatColor}55`;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+
+        // Pulsing hazard beacon halo
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, haloR, 0, Math.PI * 2);
+        ctx.strokeStyle = threatColor;
+        ctx.lineWidth = 2.4;
+        ctx.shadowColor = threatColor;
+        ctx.shadowBlur = 14;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+
       // Optional IP / DNS Host Labels
       // Automatically show labels if Display IP Labels is ON, or if Resolve DNS is ON, or if hovered, or if in relationship focus
       const shouldShowLabel =
         this.options.showIpLabels ||
         this.options.resolveDns ||
         isHovered ||
+        node.data.hasThreat ||
         (hasFocus && isNodeInFocus);
 
 
       if (shouldShowLabel) {
         const hasDns = this.options.resolveDns && (node.data.dnsName || (node.data.hostname && node.data.hostname !== node.data.ip));
         ctx.font = isHovered ? 'bold 10px JetBrains Mono, monospace' : '9px JetBrains Mono, monospace';
-        ctx.fillStyle = isHovered ? '#ffffff' : (hasDns ? '#38bdf8' : 'rgba(203, 213, 225, 0.85)');
+        ctx.fillStyle = node.data.hasThreat ? '#fca5a5' : (isHovered ? '#ffffff' : (hasDns ? '#38bdf8' : 'rgba(203, 213, 225, 0.85)'));
         ctx.textAlign = 'center';
 
         const flagPrefix =
@@ -1450,6 +1545,11 @@ export class NetworkClusterChart {
         } else if (isHovered && node.data.hostname && node.data.hostname !== node.data.ip) {
           label = `${flagPrefix}${node.data.hostname} (${node.data.ip})`;
         }
+
+        if (node.data.hasThreat) {
+          label = `⚠️ ${label}`;
+        }
+
         ctx.fillText(label, pos.x, pos.y - radius - 4);
       }
 

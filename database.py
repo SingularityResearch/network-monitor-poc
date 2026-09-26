@@ -66,6 +66,37 @@ class NetworkHistoryDB:
                         CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp 
                         ON snapshots(timestamp);
                     """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS threat_events (
+                            id TEXT PRIMARY KEY,
+                            timestamp REAL NOT NULL,
+                            iso_time TEXT NOT NULL,
+                            time_str TEXT NOT NULL,
+                            severity TEXT NOT NULL,
+                            category TEXT NOT NULL,
+                            signature TEXT NOT NULL,
+                            cve TEXT,
+                            sid INTEGER,
+                            src_ip TEXT NOT NULL,
+                            src_port INTEGER,
+                            dest_ip TEXT NOT NULL,
+                            dest_port INTEGER,
+                            proto TEXT,
+                            process TEXT,
+                            matched_payload TEXT,
+                            hit_count INTEGER DEFAULT 1,
+                            recommendation TEXT,
+                            details_json TEXT
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_threats_timestamp 
+                        ON threat_events(timestamp DESC);
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_threats_severity 
+                        ON threat_events(severity);
+                    """)
             finally:
                 conn.close()
 
@@ -285,6 +316,126 @@ class NetworkHistoryDB:
             finally:
                 conn.close()
 
+    def record_threat(self, threat: Dict[str, Any]) -> bool:
+        """Record or update a detected threat event in SQLite."""
+        if not threat or not isinstance(threat, dict):
+            return False
+        now = threat.get('timestamp') or time.time()
+        iso_time = threat.get('isoTime') or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
+        time_str = threat.get('timeStr') or time.strftime('%H:%M:%S', time.localtime(now))
+        event_id = threat.get('id') or f"threat_{int(now)}_{hash(threat.get('signature', '')) & 0xFFFFFF:06x}"
+        hit_count = threat.get('hitCount', 1)
+
+        with self.lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO threat_events (
+                            id, timestamp, iso_time, time_str, severity, category,
+                            signature, cve, sid, src_ip, src_port, dest_ip, dest_port,
+                            proto, process, matched_payload, hit_count, recommendation, details_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET
+                            hit_count = hit_count + 1,
+                            timestamp = excluded.timestamp,
+                            iso_time = excluded.iso_time,
+                            time_str = excluded.time_str;
+                    """, (
+                        event_id, now, iso_time, time_str,
+                        threat.get('severity', 'MEDIUM'),
+                        threat.get('category', 'Unknown'),
+                        threat.get('signature', 'Unknown Signature'),
+                        threat.get('cve'),
+                        threat.get('sid'),
+                        threat.get('srcIp', '0.0.0.0'),
+                        threat.get('srcPort', 0),
+                        threat.get('destIp', '0.0.0.0'),
+                        threat.get('destPort', 0),
+                        threat.get('proto', 'TCP'),
+                        threat.get('process'),
+                        str(threat.get('matchedPayload', ''))[:256],
+                        hit_count,
+                        threat.get('recommendation', ''),
+                        json.dumps(threat)
+                    ))
+                    return True
+            except Exception as e:
+                return False
+            finally:
+                conn.close()
+
+    def get_threats(self, since: Optional[float] = None, limit: int = 100, severity: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieve recent threat events, optionally filtered by timestamp or severity."""
+        query = "SELECT * FROM threat_events"
+        params = []
+        conditions = []
+
+        if since is not None:
+            conditions.append("timestamp >= ?")
+            params.append(since)
+        if severity:
+            conditions.append("severity = ?")
+            params.append(severity.upper())
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        with self.lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                threats = []
+                for row in rows:
+                    threats.append({
+                        'id': row['id'],
+                        'timestamp': row['timestamp'],
+                        'isoTime': row['iso_time'],
+                        'timeStr': row['time_str'],
+                        'severity': row['severity'],
+                        'category': row['category'],
+                        'signature': row['signature'],
+                        'cve': row['cve'],
+                        'sid': row['sid'],
+                        'srcIp': row['src_ip'],
+                        'srcPort': row['src_port'],
+                        'destIp': row['dest_ip'],
+                        'destPort': row['dest_port'],
+                        'proto': row['proto'],
+                        'process': row['process'],
+                        'matchedPayload': row['matched_payload'],
+                        'hitCount': row['hit_count'],
+                        'recommendation': row['recommendation']
+                    })
+                return threats
+            finally:
+                conn.close()
+
+    def get_threat_stats(self) -> Dict[str, Any]:
+        """Return aggregated threat metrics and counts from database."""
+        with self.lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) AS total, severity FROM threat_events GROUP BY severity;")
+                rows = cursor.fetchall()
+                counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'TOTAL': 0}
+                for r in rows:
+                    sev = r['severity']
+                    cnt = r['total']
+                    if sev in counts:
+                        counts[sev] = cnt
+                    counts['TOTAL'] += cnt
+                return counts
+            finally:
+                conn.close()
+
     def purge_expired(self) -> int:
         """Manually trigger purging of records older than 48 hours."""
         now = time.time()
@@ -296,6 +447,7 @@ class NetworkHistoryDB:
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM snapshots WHERE timestamp < ?", (cutoff,))
                     purged = cursor.rowcount
+                    cursor.execute("DELETE FROM threat_events WHERE timestamp < ?", (cutoff,))
                     if purged > 0:
                         self.total_purged += purged
                     return purged

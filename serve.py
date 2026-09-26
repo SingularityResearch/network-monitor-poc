@@ -21,6 +21,7 @@ import webbrowser
 
 from telemetry import RealNetworkCollector
 from database import db
+from threat_engine import threat_engine
 
 DEFAULT_PORT = 8080
 
@@ -57,7 +58,8 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Expires', '0')
         if self.path.startswith('/api/'):
             self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -159,6 +161,23 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
+        elif parsed.path == '/api/threats':
+            params = urllib.parse.parse_qs(parsed.query)
+            limit_val = params.get('limit', ['100'])[0]
+            limit = int(limit_val) if limit_val.isdigit() else 100
+            severity = params.get('severity', [None])[0]
+            
+            threats_summary = threat_engine.get_threats_summary() if threat_engine else {}
+            db_threats = db.get_threats(limit=limit, severity=severity)
+            
+            self.send_json_response({
+                'status': 'ok',
+                'summary': threats_summary,
+                'dbThreats': db_threats,
+                'dbStats': db.get_threat_stats()
+            })
+            return
+
         # Static file mapping: serve directly with 200 OK and strict no-cache headers
         # to ensure the browser never receives a stale 304 Not Modified response.
         STATIC_FILE_MAP = {
@@ -193,6 +212,32 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
         # Fallback to standard handler for any other requests
         super().do_GET()
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+
+        if parsed.path == '/api/threats/update':
+            if threat_engine:
+                threading.Thread(target=threat_engine.trigger_feed_update, daemon=True).start()
+                self.send_json_response({
+                    'status': 'updating',
+                    'message': 'Threat signature and CVE feed update initiated',
+                    'summary': threat_engine.get_threats_summary()
+                })
+            else:
+                self.send_json_response({'status': 'error', 'message': 'Threat engine not available'}, status_code=500)
+            return
+
+        elif parsed.path == '/api/threats/clear':
+            if threat_engine:
+                with threat_engine.lock:
+                    threat_engine.recent_threats.clear()
+                    threat_engine.active_threat_map.clear()
+            self.send_json_response({'status': 'cleared', 'message': 'Active threats buffer cleared'})
+            return
+
+        self.send_response(404)
+        self.end_headers()
 
 
 

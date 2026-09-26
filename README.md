@@ -15,8 +15,9 @@ Every node represents an IP address with **active socket connections and raw pac
 6. [Threshold Latency & Bandwidth Alerts](#threshold-latency--bandwidth-alerts)
 7. [SQLite Persistent History & 48-Hour Rolling Window](#sqlite-persistent-history--48-hour-rolling-window)
 8. [Raw Packet Capture & Promiscuous Monitoring](#raw-packet-capture--promiscuous-monitoring)
-9. [REST API Reference](#rest-api-reference)
-10. [Running Locally](#running-locally)
+9. [Threat & Exploit Detection Engine (ET Open IDS)](#threat--exploit-detection-engine-et-open-ids)
+10. [REST API Reference](#rest-api-reference)
+11. [Running Locally](#running-locally)
 
 ---
 
@@ -24,12 +25,13 @@ Every node represents an IP address with **active socket connections and raw pac
 
 - **Live Linux Kernel Telemetry**: Streams real socket stats directly from `/proc/net`, Linux `sock_diag` netlink / `ss`, and ARP neighbor cache via [telemetry.py](file:///home/shivachrome/source/repos/network-monitor/telemetry.py).
 - **Embedded Raw Packet Sniffer**: Linux `AF_PACKET` raw socket engine capturing Layer 2 Ethernet, IPv4, TCP, UDP, ICMP, ARP, DHCP, mDNS, and SSDP broadcasts.
+- **Deep Packet Inspection (DPI) & Threat Detection**: Real-time packet payload scanner matching known exploit signatures (Log4j, Spring4Shell, Shellshock, Struts, Reverse Shells, SQLi, XSS, Web Shells, Cobalt Strike, Mirai) and abuse.ch Feodo Tracker botnet C2 IP feeds.
 - **Relational Correlation Engine**: Detects internal peer-to-peer lateral mesh connections, common external destination domains/URLs accessed by multiple hosts, and protocol affinity clusters.
-- **Canvas Focus Spotlight**: Isolate relational subgraphs on canvas with non-matching node/connection dimming, animated packet stream restriction, and glowing halo accents.
+- **Canvas Focus Spotlight**: Isolate relational subgraphs on canvas with non-matching node/connection dimming, animated packet stream restriction, glowing halo accents, and threat hazard vectors.
 - **K-Means Subnet Clustering**: Auto-tunes $K$ centroids using Silhouette Score and WCSS Inertia to discover virtual subnet gateways and routing boundaries.
-- **Hardware-Accelerated 60 FPS Canvas Engine**: Smooth lerp coordinate interpolation, organic micro-drift motion, and interactive mouse-anchored zoom and pan in [chart.js](file:///home/shivachrome/source/repos/network-monitor/chart.js).
+- **Hardware-Accelerated 60 FPS Canvas Engine**: Smooth lerp coordinate interpolation, organic micro-drift motion, interactive mouse-anchored zoom/pan, and pulsing crimson hazard beacons in [chart.js](file:///home/shivachrome/source/repos/network-monitor/chart.js).
 - **Deep Socket Inspector**: Interactive sliding drawer inspecting kernel sockets with protocol badges, TCP connection states, local/remote endpoints, process attribution, TCP RTT variance, and CWND queue buffers.
-- **Persistent SQLite Storage**: Background recorder storing full topology snapshots with Write-Ahead Logging (WAL) and automatic rolling 48-hour data retention in [database.py](file:///home/shivachrome/source/repos/network-monitor/database.py).
+- **Persistent SQLite Storage**: Background recorder storing full topology snapshots and threat events with Write-Ahead Logging (WAL) and automatic rolling 48-hour data retention in [database.py](file:///home/shivachrome/source/repos/network-monitor/database.py).
 - **Historical Timeline Scrubber**: Step backward in time, scrub with a timeline slider across `10m`, `1h`, `6h`, `24h`, and `48h`, and run automated replay playback.
 - **Active Threshold Alerts**: Real-time notifications and canvas pulse overlays triggered whenever latency or bandwidth exceed custom thresholds.
 
@@ -210,14 +212,56 @@ In modern switched Ethernet and WPA-encrypted Wi-Fi networks, network switches a
 
 ---
 
+## Threat & Exploit Detection Engine (ET Open IDS)
+
+The application includes an embedded, high-performance **Intrusion Detection System (IDS)** and **Deep Packet Inspection (DPI)** engine in [threat_engine.py](file:///home/shivachrome/source/repos/network-monitor/threat_engine.py). It operates concurrently with the raw packet sniffer to detect active exploits, malware command-and-control (C2) communications, reconnaissance sweeps, and abnormal TCP flags in real time.
+
+### 1. Dynamic Packet Signature & CVE Ingestion (ET Open & CISA KEV)
+The engine maintains **zero hardcoded signatures**. Every time the application starts up, it connects to official threat feeds to pull the latest rules and schedules automatic updates:
+- **Emerging Threats (ET Open)**: Compiles over 2,300+ deep packet inspection (DPI) rules across TCP, UDP, ICMP, and application protocols.
+- **CISA Known Exploited Vulnerabilities (KEV) Catalog**: Enriches signatures with real-time CVE IDs, vulnerability names, and mandatory mitigation/remediation actions.
+- **High-Performance Multi-Stage Matching**: Fast-path port and protocol indexing with substring and hex pattern matching (`content:`), with fallback to regex evaluation.
+- **Scheduled Dynamic Updates**: Automatically checks and refreshes threat signatures on startup and every 6 hours in the background, with local disk caching for instant boot and offline resilience.
+
+### 2. Threat Intelligence Feeds & C2 Reputation
+- **abuse.ch Feodo Tracker Integration**: The engine automatically downloads and refreshes active botnet Command & Control (C2) IP addresses (AsyncRAT, Dridex, Emotet, QakBot, TrickBot) on startup and on schedule.
+- **CINS Army Threat Intelligence**: Integrates 15,000+ hostile scanner IPs and active recon botnets.
+- **Behavioral Heuristics**:
+  - **Horizontal Port Sweeps**: Automatically detects and flags single source hosts probing more than 12 destination ports within a 6-second window.
+  - **Abnormal TCP Flags**: Flags suspicious packet flag combinations frequently generated by scanning tools (e.g. `Xmas Scan` with FIN+URG+PSH, `NULL Scan` with 0 flags, and invalid `SYN+FIN`).
+
+### 3. Canvas Threat Visualizations
+When real network threats are detected:
+- **Pulsing Crimson Hazard Beacon Halos**: Affected host nodes are wrapped in expanding hazard halos and outer shockwave ripples colored by severity (🔴 Red for Critical, 🟠 Orange for High, 🟡 Yellow for Medium).
+- **Hazard Exploit Vectors**: Threat flows flash in crimson (`#ef4444`) with high-glow shadows and red packet particles traveling between the source and target.
+- **Tooltip Threat Notices**: Hovering over compromised nodes or connections reveals prominent hazard headers displaying the signature, CVE, category, and hit count.
+- **Spotlight Threat Isolation**: Clicking **Focus on Canvas** dims all non-related nodes to `0.06` opacity and restricts packet particle travel exclusively to the exploit path.
+
+### 4. Threat & Exploit Detection Drawer
+- **Header Threat Shield Button**: Features a glowing crimson shield button with a live badge pill that pulses with a hazard heartbeat whenever active threats exist.
+- **Sidebar Threat Button**: Direct access in the navigation controls.
+- **Summary KPI Grid**: Displays live stats for *Active Threats*, *Critical Exploits*, *C2 / Scanners*, and *Packets Inspected*.
+- **Live Feed Status Bar & Manual Sync**: Real-time indicator displaying active dynamic rule count, tracked CVE count, and last-updated timestamp with a 1-click **Sync Feeds** button.
+- **Severity Tabs & Real-Time Filter**: Filter threats by severity (`All`, `Critical`, `High`, `Medium/Low`) and search by IP, CVE, port, process, or signature.
+- **Actionable Threat Cards**:
+  - Packet payload snippet / match evidence
+  - Process attribution and PID
+  - Actionable remediation advice (CISA KEV mitigations, patch recommendations, port isolation)
+  - **1-Click Copy IP Block Rule**: Copies pre-formatted Linux `iptables -A INPUT -s <IP> -j DROP` commands to the clipboard.
+
+---
+
 ## REST API Reference
 
-The backend exposes a JSON REST API for frontend streaming and automation:
+The backend exposes a JSON REST API for frontend streaming, automation, and threat monitoring:
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/network-telemetry` | `GET` | Fetches live network topology, nodes, connections, clusters, and relationships. Parameters: `scope` (`all`, `internal`, `public`), `k` (cluster count), `resolve_dns` (bool), `resolve_geoip` (bool). |
+| `/api/network-telemetry` | `GET` | Fetches live network topology, nodes, connections, clusters, relationships, and threat summary. Parameters: `scope` (`all`, `internal`, `public`), `k` (cluster count), `resolve_dns` (bool), `resolve_geoip` (bool). |
 | `/api/relationships` | `GET` | Returns detected relational patterns: `internalMesh` (peer pairs), `sharedDestinations` (common domains/URLs), `commonProtocols` (service clusters), and `summary`. |
+| `/api/threats` | `GET` | Returns live threat summary, dynamic feed status, rules/CVE counts, recent database threat events, and severity statistics. |
+| `/api/threats/update` | `POST` | Triggers an immediate synchronization of online threat signatures (ET Open, CISA KEV, abuse.ch Feodo Tracker, CINS Army). |
+| `/api/threats/clear` | `POST` | Clears active in-memory threat alerts from the dashboard. |
 | `/api/trigger-scan` | `GET` | Asynchronously triggers a non-blocking LAN ARP/ping sweep across the local `/24` subnet. |
 | `/api/history/stats` | `GET` | Returns SQLite database status: total snapshots, database size in MB, oldest/newest timestamps, and 48-hour coverage percentage. |
 | `/api/history/snapshots` | `GET` | Returns list of stored snapshot summaries within a time window. Parameters: `since` (seconds ago, default `172800`), `limit`, `summary` (`true`/`false`). |

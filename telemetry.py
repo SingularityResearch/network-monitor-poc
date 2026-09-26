@@ -26,6 +26,11 @@ import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+try:
+    from threat_engine import threat_engine
+except Exception:
+    threat_engine = None
+
 # Linux socket constants for raw packet capturing
 SOL_PACKET = 263
 PACKET_ADD_MEMBERSHIP = 1
@@ -256,19 +261,38 @@ class RawPacketSniffer:
                     src_port = 0
                     dst_port = 0
                     proto_str = 'OTHER'
+                    payload_bytes = b""
+                    tcp_flags = 0
                     
-                    if proto_num == 6 and pkt_len >= payload_offset + 4: # TCP
-                        tcph = struct.unpack('!HH', data[payload_offset:payload_offset+4])
+                    if proto_num == 6 and pkt_len >= payload_offset + 14: # TCP
+                        tcph = struct.unpack('!HHIIBB', data[payload_offset:payload_offset+14])
                         src_port, dst_port = tcph[0], tcph[1]
+                        offset_reserved = tcph[4]
+                        tcp_flags = tcph[5]
+                        tcp_hdr_len = (offset_reserved >> 4) * 4
+                        if pkt_len >= payload_offset + tcp_hdr_len:
+                            payload_bytes = data[payload_offset + tcp_hdr_len:]
                         proto_str = 'TCP'
-                    elif proto_num == 17 and pkt_len >= payload_offset + 4: # UDP
-                        udph = struct.unpack('!HH', data[payload_offset:payload_offset+4])
+                    elif proto_num == 17 and pkt_len >= payload_offset + 8: # UDP
+                        udph = struct.unpack('!HHHH', data[payload_offset:payload_offset+8])
                         src_port, dst_port = udph[0], udph[1]
+                        if pkt_len >= payload_offset + 8:
+                            payload_bytes = data[payload_offset + 8:]
                         proto_str = 'UDP'
                     elif proto_num == 1: # ICMP
                         proto_str = 'ICMP'
+                        if pkt_len >= payload_offset + 8:
+                            payload_bytes = data[payload_offset + 8:]
                     else:
                         continue
+
+                    # Deep packet inspection via Threat Engine
+                    if threat_engine:
+                        try:
+                            threat_engine.inspect_packet(proto_str, src_ip, src_port, dst_ip, dst_port,
+                                                         payload_bytes, tcp_flags=tcp_flags)
+                        except Exception:
+                            pass
                     
                     # Inter-device detection: neither endpoint is our local IP or loopback
                     is_inter_device = (
@@ -1182,6 +1206,49 @@ class RealNetworkCollector:
         internal_sockets_count = sum(1 for c in connections if c['isInternal'])
         public_sockets_count = sum(1 for c in connections if not c['isInternal'])
 
+        # Threat & Exploit Detection integration
+        threat_summary = threat_engine.get_threats_summary() if threat_engine else {
+            'activeThreatsCount': 0, 'criticalCount': 0, 'highCount': 0, 'mediumCount': 0, 'lowCount': 0,
+            'affectedHostsCount': 0, 'threats': []
+        }
+        
+        # Build lookup of active threats by IP and connection pair
+        threat_by_ip = {}
+        threat_by_pair = set()
+        for t in threat_summary.get('threats', []):
+            s_ip = t.get('srcIp')
+            d_ip = t.get('destIp')
+            sev = t.get('severity', 'MEDIUM')
+            sig = t.get('signature', '')
+            cat = t.get('category', '')
+            if s_ip:
+                threat_by_ip[s_ip] = {'severity': sev, 'signature': sig, 'category': cat}
+            if d_ip:
+                threat_by_ip[d_ip] = {'severity': sev, 'signature': sig, 'category': cat}
+            if s_ip and d_ip:
+                threat_by_pair.add((s_ip, d_ip))
+                threat_by_pair.add((d_ip, s_ip))
+
+        # Tag nodes with threat status for Canvas rendering
+        for n in nodes:
+            ip = n.get('ip')
+            if ip in threat_by_ip:
+                t_info = threat_by_ip[ip]
+                n['hasThreat'] = True
+                n['threatSeverity'] = t_info['severity']
+                n['threatSignature'] = t_info['signature']
+                n['threatCategory'] = t_info['category']
+
+        # Tag connections with threat status for hazard line rendering
+        for c in connections:
+            pair = (c.get('srcIP'), c.get('destIP'))
+            if pair in threat_by_pair or c.get('srcIP') in threat_by_ip or c.get('destIP') in threat_by_ip:
+                c['hasThreat'] = True
+                c_threat = threat_by_ip.get(c.get('srcIP')) or threat_by_ip.get(c.get('destIP'))
+                if c_threat:
+                    c['threatSeverity'] = c_threat['severity']
+                    c['threatSignature'] = c_threat['signature']
+
         # Extract Relational Graph Clusters (Internal Mesh, Shared Domains/URLs, Common Protocols)
         relationships = self.extract_relationships(nodes, connections)
 
@@ -1189,6 +1256,7 @@ class RealNetworkCollector:
             'nodes': nodes,
             'connections': connections,
             'relationships': relationships,
+            'threats': threat_summary,
             'sockets': detailed_sockets,
             'subnetGateways': ZONE_CENTERS,
             'meta': {

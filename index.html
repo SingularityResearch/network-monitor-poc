@@ -60,8 +60,18 @@
         </div>
       </div>
 
-      <!-- Quick Action Buttons: Relationships Explorer, Deep Socket Inspector & Alert Center -->
+      <!-- Quick Action Buttons: Threat Center, Relationships Explorer, Deep Socket Inspector & Alert Center -->
       <div class="header-action-group">
+        <button class="header-action-btn threat-shield-btn" id="btnOpenThreats" title="Threat &amp; Exploit Detection Center (ET Open IDS)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>Threats</span>
+          <span class="alert-count-pill threat-pill" id="headerThreatCount" style="background: rgba(239, 68, 68, 0.25); color: #ef4444; border-color: rgba(239, 68, 68, 0.4);">0</span>
+        </button>
+
         <button class="header-action-btn relationships-btn" id="btnOpenRelationships" title="Network Relationship &amp; Correlation Explorer">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="18" cy="5" r="3"></circle>
@@ -197,6 +207,16 @@
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
           </svg>
           <span style="color: var(--accent-cyan); font-weight: 600;">Relationships</span>
+        </button>
+      </div>
+
+      <div style="display: flex; gap: 6px; margin-bottom: 0.85rem;">
+        <button class="btn btn-secondary" id="btnSidebarThreats" style="flex: 1; font-size: 0.76rem; padding: 0.45rem 0.5rem; border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.1);" title="Threat &amp; Exploit Detection Center">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span style="color: #f87171; font-weight: 600;">Threat Shield (<span id="sidebarThreatCount">0</span>)</span>
         </button>
       </div>
 
@@ -739,6 +759,99 @@
 
     <!-- Scrollable Relationship Cards Container -->
     <div class="rel-content-scroll" id="relContentScroll">
+      <!-- Dynamically populated -->
+    </div>
+  </aside>
+
+  <!-- Threat & Exploit Detection Explorer Drawer -->
+  <div class="inspector-drawer-backdrop" id="threatDrawerBackdrop"></div>
+  <aside class="inspector-drawer threat-drawer" id="threatDrawer">
+    <div class="inspector-header">
+      <div class="inspector-title-area">
+        <div class="inspector-badge" style="color: #ef4444;">
+          <span class="live-dot" style="background: #ef4444; box-shadow: 0 0 8px #ef4444;"></span>
+          <span>ET OPEN IDS &bull; THREAT &bull; EXPLOIT ENGINE</span>
+        </div>
+        <h3 id="threatDrawerTitle">Threat &amp; Exploit Detection Center</h3>
+        <p id="threatDrawerSubtitle">Real-time Deep Packet Inspection, Known Botnet C2s, and Exploits</p>
+      </div>
+      <div class="inspector-header-actions">
+        <button class="btn btn-secondary" id="btnClearThreats" style="font-size:0.72rem; padding:0.3rem 0.6rem; color:#ef4444; border-color:rgba(239,68,68,0.3);" title="Clear active threat notifications">Clear All</button>
+        <button class="inspector-close-btn" id="btnCloseThreatDrawer" title="Close Threat Center">✕</button>
+      </div>
+    </div>
+
+    <!-- Threat Summary KPI Grid -->
+    <div class="rel-summary-grid threat-summary-grid">
+      <div class="rel-kpi-card" id="threatKpiActive">
+        <span class="rel-kpi-val" id="threatKpiActiveVal" style="color:#ef4444;">0</span>
+        <span class="rel-kpi-label">Active Threats</span>
+      </div>
+      <div class="rel-kpi-card" id="threatKpiCritical">
+        <span class="rel-kpi-val highlight-amber" id="threatKpiCriticalVal">0</span>
+        <span class="rel-kpi-label">Critical Exploits</span>
+      </div>
+      <div class="rel-kpi-card" id="threatKpiC2">
+        <span class="rel-kpi-val highlight-cyan" id="threatKpiC2Val">0</span>
+        <span class="rel-kpi-label">C2 / Scanners</span>
+      </div>
+      <div class="rel-kpi-card" id="threatKpiInspected">
+        <span class="rel-kpi-val highlight-emerald" id="threatKpiInspectedVal" style="font-size:0.8rem; font-family:var(--font-mono);">0</span>
+        <span class="rel-kpi-label">Packets Inspected</span>
+      </div>
+    </div>
+
+    <!-- Dynamic Threat Intelligence Feed Status & Live Sync Bar -->
+    <div class="threat-feed-bar" id="threatFeedBar">
+      <div class="threat-feed-status-wrap">
+        <span class="threat-feed-dot pulse" id="threatFeedDot"></span>
+        <div class="threat-feed-info">
+          <div class="threat-feed-title" id="threatFeedStatusTitle">Live Threat Feed: Synced</div>
+          <div class="threat-feed-details" id="threatFeedDetails">
+            <span id="threatRulesLoadedCount">0</span> dynamic rules &bull; <span id="threatCvesTrackedCount">0</span> active CVEs &bull; ET Open &amp; CISA KEV
+          </div>
+        </div>
+      </div>
+      <div class="threat-feed-controls">
+        <span class="threat-feed-time" id="threatFeedLastUpdated" title="Scheduled to refresh automatically every 6 hours">Updated: Just now</span>
+        <button class="threat-feed-btn" id="btnUpdateThreatFeed" title="Fetch fresh CVE exploit signatures and reputation feeds now">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="spin-icon">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          <span id="btnUpdateThreatFeedText">Sync Feeds</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Tabs & Filter Bar -->
+    <div class="rel-nav-bar">
+      <div class="rel-tabs">
+        <button class="rel-tab-btn active" data-tab="all" id="tabThreatAll">
+          All Threats (<span id="countThreatAll">0</span>)
+        </button>
+        <button class="rel-tab-btn" data-tab="critical" id="tabThreatCrit">
+          🔴 Critical (<span id="countThreatCrit">0</span>)
+        </button>
+        <button class="rel-tab-btn" data-tab="high" id="tabThreatHigh">
+          🟠 High (<span id="countThreatHigh">0</span>)
+        </button>
+        <button class="rel-tab-btn" data-tab="medium" id="tabThreatMed">
+          🟡 Medium / Low (<span id="countThreatMed">0</span>)
+        </button>
+      </div>
+      <div class="rel-search-wrap">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="threatSearchInput" placeholder="Filter threats by IP, CVE, signature, process, port...">
+      </div>
+    </div>
+
+    <!-- Scrollable Threat Cards Container -->
+    <div class="rel-content-scroll threat-content-scroll" id="threatContentScroll">
       <!-- Dynamically populated -->
     </div>
   </aside>

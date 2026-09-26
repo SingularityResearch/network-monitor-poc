@@ -166,6 +166,34 @@ class NetworkClusterApp {
     this.currentRelTab = 'mesh';
     this.relSearchQuery = '';
 
+    // Threat & Exploit Detection Engine Controls
+    this.btnOpenThreats = document.getElementById('btnOpenThreats');
+    this.headerThreatCount = document.getElementById('headerThreatCount');
+    this.btnSidebarThreats = document.getElementById('btnSidebarThreats');
+    this.sidebarThreatCount = document.getElementById('sidebarThreatCount');
+    this.threatDrawer = document.getElementById('threatDrawer');
+    this.threatDrawerBackdrop = document.getElementById('threatDrawerBackdrop');
+    this.btnCloseThreatDrawer = document.getElementById('btnCloseThreatDrawer');
+    this.btnClearThreats = document.getElementById('btnClearThreats');
+    this.threatKpiActiveVal = document.getElementById('threatKpiActiveVal');
+    this.threatKpiCriticalVal = document.getElementById('threatKpiCriticalVal');
+    this.threatKpiC2Val = document.getElementById('threatKpiC2Val');
+    this.threatKpiInspectedVal = document.getElementById('threatKpiInspectedVal');
+    this.tabThreatAll = document.getElementById('tabThreatAll');
+    this.tabThreatCrit = document.getElementById('tabThreatCrit');
+    this.tabThreatHigh = document.getElementById('tabThreatHigh');
+    this.tabThreatMed = document.getElementById('tabThreatMed');
+    this.countThreatAll = document.getElementById('countThreatAll');
+    this.countThreatCrit = document.getElementById('countThreatCrit');
+    this.countThreatHigh = document.getElementById('countThreatHigh');
+    this.countThreatMed = document.getElementById('countThreatMed');
+    this.threatSearchInput = document.getElementById('threatSearchInput');
+    this.threatContentScroll = document.getElementById('threatContentScroll');
+
+    this.threatData = null;
+    this.currentThreatTab = 'all';
+    this.threatSearchQuery = '';
+
     // Historical Topology Timeline Controls
     this.timelineBar = document.getElementById('timelineBar');
     this.btnTimelineStepBack = document.getElementById('btnTimelineStepBack');
@@ -601,6 +629,44 @@ class NetworkClusterApp {
       });
     }
 
+    // Threat & Exploit Detection Drawer triggers
+    if (this.btnOpenThreats) {
+      this.btnOpenThreats.addEventListener('click', () => this.openThreatDrawer());
+    }
+    this.btnSidebarThreats?.addEventListener('click', () => this.openThreatDrawer());
+    this.btnCloseThreatDrawer?.addEventListener('click', () => this.closeThreatDrawer());
+    this.threatDrawerBackdrop?.addEventListener('click', () => this.closeThreatDrawer());
+    this.btnClearThreats?.addEventListener('click', () => this.clearThreats());
+
+    // Dynamic Threat Intelligence Feed Manual Sync
+    this.btnUpdateThreatFeed = document.getElementById('btnUpdateThreatFeed');
+    this.btnUpdateThreatFeed?.addEventListener('click', () => this.updateThreatSignatures());
+
+    // Threat Tabs
+    const threatTabs = [
+      { btn: this.tabThreatAll, tab: 'all' },
+      { btn: this.tabThreatCrit, tab: 'critical' },
+      { btn: this.tabThreatHigh, tab: 'high' },
+      { btn: this.tabThreatMed, tab: 'medium' }
+    ];
+    threatTabs.forEach(({ btn, tab }) => {
+      if (btn) {
+        btn.addEventListener('click', () => {
+          threatTabs.forEach((t) => t.btn?.classList.remove('active'));
+          btn.classList.add('active');
+          this.currentThreatTab = tab;
+          this.renderThreatsContent();
+        });
+      }
+    });
+
+    if (this.threatSearchInput) {
+      this.threatSearchInput.addEventListener('input', (e) => {
+        this.threatSearchQuery = e.target.value.toLowerCase().trim();
+        this.renderThreatsContent();
+      });
+    }
+
     // Timeline Scrubber Controls
     this.btnTimelineStepBack?.addEventListener('click', () => this.stepTimeline(-1));
     this.btnTimelineStepFwd?.addEventListener('click', () => this.stepTimeline(1));
@@ -626,8 +692,20 @@ class NetworkClusterApp {
       });
     }
 
-    // Spacebar shortcut
+    // Global keyboard shortcuts (Escape to close open drawers, Spacebar to toggle stream)
     window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        if (this.threatDrawer?.classList.contains('open')) {
+          this.closeThreatDrawer();
+        } else if (this.relDrawer?.classList.contains('open')) {
+          this.closeRelationshipsDrawer();
+        } else if (this.inspectorDrawer?.classList.contains('open')) {
+          this.closeSocketInspector();
+        } else if (this.alertsDrawer?.classList.contains('open')) {
+          this.alertsDrawer?.classList.remove('open');
+          this.alertsBackdrop?.classList.remove('open');
+        }
+      }
       if (e.code === 'Space' && e.target === document.body) {
         e.preventDefault();
         this.togglePlayback();
@@ -726,6 +804,11 @@ class NetworkClusterApp {
         this.updateRelationshipsData(realData.relationships);
       } else if (this.relDrawer?.classList.contains('open')) {
         this.renderRelationships();
+      }
+      if (realData.threats) {
+        this.updateThreatsData(realData.threats);
+      } else if (this.threatDrawer?.classList.contains('open')) {
+        this.fetchThreats();
       }
       if (!this.lastHistoryLogTime || now - this.lastHistoryLogTime >= 8000) {
         this.lastHistoryLogTime = now;
@@ -1759,6 +1842,361 @@ class NetworkClusterApp {
         }
       });
     });
+  }
+
+  // ==========================================================================
+  // Threat & Exploit Detection Center (ET Open IDS / Deep Packet Inspection)
+  // ==========================================================================
+  async openThreatDrawer() {
+    if (this.threatDrawer) this.threatDrawer.classList.add('open');
+    if (this.threatDrawerBackdrop) this.threatDrawerBackdrop.classList.add('open');
+
+    await this.fetchThreats();
+    this.renderThreatsContent();
+  }
+
+  closeThreatDrawer() {
+    if (this.threatDrawer) this.threatDrawer.classList.remove('open');
+    if (this.threatDrawerBackdrop) this.threatDrawerBackdrop.classList.remove('open');
+  }
+
+  updateThreatsData(threatSummary) {
+    if (!threatSummary) return;
+    const activeCount = threatSummary.count || 0;
+    const threats = threatSummary.active || [];
+    const stats = threatSummary.stats || {};
+    const inspected = threatSummary.inspectedPackets || 0;
+
+    // Update Header and Sidebar Threat Counts
+    if (this.headerThreatCount) {
+      this.headerThreatCount.textContent = activeCount;
+      if (activeCount > 0) {
+        this.headerThreatCount.classList.add('has-threats');
+      } else {
+        this.headerThreatCount.classList.remove('has-threats');
+      }
+    }
+    if (this.sidebarThreatCount) {
+      this.sidebarThreatCount.textContent = activeCount;
+      if (activeCount > 0) {
+        this.sidebarThreatCount.classList.add('has-threats');
+      } else {
+        this.sidebarThreatCount.classList.remove('has-threats');
+      }
+    }
+
+    // Save threat data structure
+    this.threatData = {
+      count: activeCount,
+      threats: threats,
+      stats: stats,
+      inspectedPackets: inspected,
+      summary: threatSummary.summary || {}
+    };
+
+    // Update Live Feed Status Bar elements
+    const summary = threatSummary.summary || {};
+    const rulesCountEl = document.getElementById('threatRulesLoadedCount');
+    const cvesCountEl = document.getElementById('threatCvesTrackedCount');
+    const feedDotEl = document.getElementById('threatFeedDot');
+    const feedTitleEl = document.getElementById('threatFeedStatusTitle');
+    const feedLastUpdatedEl = document.getElementById('threatFeedLastUpdated');
+
+    if (rulesCountEl && summary.totalRulesLoaded !== undefined) {
+      rulesCountEl.textContent = Number(summary.totalRulesLoaded).toLocaleString();
+    }
+    if (cvesCountEl && summary.totalTrackedCVEs !== undefined) {
+      cvesCountEl.textContent = Number(summary.totalTrackedCVEs).toLocaleString();
+    }
+    if (feedTitleEl && summary.feedStatus) {
+      feedTitleEl.textContent = `Live Threat Feed: ${summary.feedStatus}`;
+    }
+    if (feedLastUpdatedEl && summary.lastUpdatedStr) {
+      const intervalStr = summary.updateIntervalHours ? `every ${summary.updateIntervalHours}h` : 'every 6h';
+      feedLastUpdatedEl.textContent = `Updated: ${summary.lastUpdatedStr} (auto-sync ${intervalStr})`;
+    }
+    if (feedDotEl) {
+      if (summary.isUpdating) {
+        feedDotEl.classList.add('updating');
+      } else {
+        feedDotEl.classList.remove('updating');
+      }
+    }
+
+    // Update KPI values
+    const critCount = threats.filter(t => (t.severity || '').toLowerCase() === 'critical').length;
+    const highCount = threats.filter(t => (t.severity || '').toLowerCase() === 'high').length;
+    const medCount = threats.filter(t => ['medium', 'low'].includes((t.severity || '').toLowerCase())).length;
+    const c2Count = threats.filter(t => {
+      const cat = (t.category || '').toLowerCase();
+      return cat.includes('c2') || cat.includes('scan') || cat.includes('botnet');
+    }).length;
+
+    if (this.threatKpiActiveVal) this.threatKpiActiveVal.textContent = activeCount;
+    if (this.threatKpiCriticalVal) this.threatKpiCriticalVal.textContent = stats.CRITICAL !== undefined ? stats.CRITICAL : (stats.critical !== undefined ? stats.critical : critCount);
+    if (this.threatKpiC2Val) this.threatKpiC2Val.textContent = c2Count;
+    if (this.threatKpiInspectedVal) this.threatKpiInspectedVal.textContent = inspected.toLocaleString();
+
+    // Update Tab Counters
+    if (this.countThreatAll) this.countThreatAll.textContent = activeCount;
+    if (this.countThreatCrit) this.countThreatCrit.textContent = critCount;
+    if (this.countThreatHigh) this.countThreatHigh.textContent = highCount;
+    if (this.countThreatMed) this.countThreatMed.textContent = medCount;
+
+    if (this.threatDrawer?.classList.contains('open')) {
+      this.renderThreatsContent();
+    }
+  }
+
+  async fetchThreats() {
+    try {
+      const res = await fetch('/api/threats');
+      if (res.ok) {
+        const data = await res.json();
+        const summary = data.summary || {};
+        const activeThreats = summary.threats || data.threats || [];
+        const activeCount = summary.activeThreatsCount !== undefined
+          ? summary.activeThreatsCount
+          : (data.count !== undefined ? data.count : activeThreats.length);
+        const stats = data.dbStats || data.stats || {};
+        const inspected = summary.totalInspectedPackets !== undefined
+          ? summary.totalInspectedPackets
+          : (data.inspectedPackets || 0);
+
+        this.updateThreatsData({
+          count: activeCount,
+          active: activeThreats,
+          stats: stats,
+          inspectedPackets: inspected,
+          summary: summary
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to fetch threats API:', err);
+    }
+  }
+
+  renderThreatsContent() {
+    if (!this.threatContentScroll) return;
+    const container = this.threatContentScroll;
+
+    if (!this.threatData || !this.threatData.threats || this.threatData.threats.length === 0) {
+      const rules = this.threatData?.summary?.totalRulesLoaded || 0;
+      const cves = this.threatData?.summary?.totalTrackedCVEs || 0;
+      const rulesText = rules > 0 ? `${rules.toLocaleString()} live exploit signatures` : 'Emerging Threats & Snort DPI rules';
+      const cvesText = cves > 0 ? ` (${cves.toLocaleString()} CISA-tracked CVEs)` : '';
+
+      container.innerHTML = `
+        <div style="text-align:center;padding:48px 16px;color:#64748b;">
+          <div style="font-size:2.8rem;margin-bottom:12px;">🛡️</div>
+          <div style="font-size:1.05rem;font-weight:700;color:#f1f5f9;margin-bottom:6px;">No Active Network Threats Detected</div>
+          <div style="font-size:0.8rem;color:#94a3b8;max-width:440px;margin:0 auto 16px auto;line-height:1.5;">
+            Deep Packet Inspection (DPI) is actively inspecting packet streams in real time against <b>${rulesText}${cvesText}</b>, abuse.ch Feodo C2 blocklists, and behavioral anomaly heuristics.
+          </div>
+          <div style="font-size:0.75rem;color:#38bdf8;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);border-radius:6px;padding:8px 14px;display:inline-block;">
+            ⚡ Threat intelligence feeds are active and scheduled for periodic updates.
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    const q = this.threatSearchQuery.toLowerCase();
+    const tab = this.currentThreatTab;
+
+    const filtered = this.threatData.threats.filter((threat) => {
+      // Tab filter
+      const sev = (threat.severity || 'critical').toLowerCase();
+      if (tab === 'critical' && sev !== 'critical') return false;
+      if (tab === 'high' && sev !== 'high') return false;
+      if (tab === 'medium' && !['medium', 'low'].includes(sev)) return false;
+
+      // Search filter
+      if (q) {
+        const src = threat.srcIp || threat.srcIP || '';
+        const dest = threat.destIp || threat.destIP || '';
+        const text = `${threat.signature} ${threat.category} ${src} ${dest} ${threat.destPort || ''} ${threat.cve || ''} ${threat.process || ''}`.toLowerCase();
+        if (!text.includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      container.innerHTML = `
+        <div style="text-align:center;padding:36px 16px;color:#64748b;">
+          <div style="font-size:1.8rem;margin-bottom:8px;">🔍</div>
+          <div style="font-size:0.95rem;font-weight:600;color:#cbd5e1;">No threats match your current filter</div>
+          <div style="font-size:0.75rem;color:#64748b;margin-top:4px;">Try selecting "All Threats" or clearing the search query.</div>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = filtered.map((threat) => {
+      const sev = (threat.severity || 'critical').toLowerCase();
+      const sevClass = `sev-${sev}`;
+      const srcIP = threat.srcIp || threat.srcIP || 'Unknown';
+      const destIP = threat.destIp || threat.destIP || 'Unknown';
+      const destPort = threat.destPort ? `:${threat.destPort}` : '';
+      const timeStr = threat.timeStr || (threat.lastSeen ? new Date(threat.lastSeen * 1000).toLocaleTimeString() : 'Just now');
+      const hitCount = threat.hitCount || threat.hits || 1;
+      const hitsBadge = hitCount > 1 ? `<span style="font-size:0.7rem;background:rgba(239,68,68,0.2);color:#fca5a5;padding:2px 6px;border-radius:4px;font-weight:700;">${hitCount} hits</span>` : '';
+
+      const rawPayload = threat.matchedPayload || threat.payloadSnippet || '';
+      const payloadSnippet = rawPayload ? `
+        <div class="threat-payload-box">
+          <div class="threat-payload-title">PACKET PAYLOAD / MATCH EVIDENCE:</div>
+          <code>${this.escapeHtml(rawPayload)}</code>
+        </div>
+      ` : '';
+
+      const rec = threat.recommendation || '';
+      const recommendation = rec ? `
+        <div class="threat-recommendation-box">
+          <b>Action:</b> ${this.escapeHtml(rec)}
+        </div>
+      ` : '';
+
+      const processLine = threat.process ? `
+        <div style="display:flex;align-items:center;gap:6px;font-size:0.76rem;color:#c084fc;margin-top:4px;">
+          <span>⚙️ Process: <b>${this.escapeHtml(threat.process)}</b>${threat.pid ? ` (PID ${threat.pid})` : ''}</span>
+        </div>
+      ` : '';
+
+      const cveBadge = threat.cve ? `<span style="font-size:0.68rem;background:rgba(168,85,247,0.2);color:#d8b4fe;border:1px solid rgba(168,85,247,0.4);padding:1px 5px;border-radius:3px;font-weight:700;">${this.escapeHtml(threat.cve)}</span>` : '';
+
+      return `
+        <div class="threat-card ${sevClass}" data-threat-id="${threat.id || ''}">
+          <div class="threat-card-header">
+            <div class="threat-card-meta">
+              <span class="threat-sev-badge ${sevClass}">${sev.toUpperCase()}</span>
+              <span class="threat-category-tag">${this.escapeHtml(threat.category || 'EXPLOIT')}</span>
+              ${cveBadge}
+              ${hitsBadge}
+            </div>
+            <div class="threat-time-label">${timeStr}</div>
+          </div>
+
+          <h4 class="threat-card-title">${this.escapeHtml(threat.signature)}</h4>
+
+          <div class="threat-flow-bar">
+            <span class="threat-ip-pill">${this.escapeHtml(srcIP)}</span>
+            <span class="threat-flow-arrow">➔</span>
+            <span class="threat-ip-pill" style="color:#ef4444;border-color:rgba(239,68,68,0.4);">${this.escapeHtml(destIP)}${this.escapeHtml(destPort)}</span>
+          </div>
+
+          ${processLine}
+          ${payloadSnippet}
+          ${recommendation}
+
+          <div class="threat-actions-bar">
+            <button class="threat-action-btn btn-focus-threat" data-src="${this.escapeHtml(srcIP)}" data-dest="${this.escapeHtml(destIP)}" data-port="${threat.destPort || ''}" data-sig="${this.escapeHtml(threat.signature)}" data-sev="${sev}" data-cat="${this.escapeHtml(threat.category || '')}">
+              🎯 Focus on Canvas
+            </button>
+            <button class="threat-action-btn btn-block-ip" data-ip="${this.escapeHtml(srcIP)}">
+              📋 Copy IP Block Rule
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Attach click listeners for Focus on Canvas and Copy IP Block Rule
+    container.querySelectorAll('.btn-focus-threat').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const target = e.currentTarget;
+        const threatObj = {
+          srcIP: target.dataset.src,
+          destIP: target.dataset.dest,
+          destPort: target.dataset.port ? parseInt(target.dataset.port, 10) : null,
+          signature: target.dataset.sig,
+          severity: target.dataset.sev,
+          category: target.dataset.cat
+        };
+        this.chart.setFocusThreat(threatObj);
+        this.closeThreatDrawer();
+      });
+    });
+
+    container.querySelectorAll('.btn-block-ip').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const ip = e.currentTarget.dataset.ip;
+        const cmd = `iptables -A INPUT -s ${ip} -j DROP # Block malicious actor detected by Network Monitor`;
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(cmd).then(() => {
+            const original = btn.textContent;
+            btn.textContent = '✓ Copied iptables!';
+            btn.style.color = '#34d399';
+            btn.style.borderColor = 'rgba(52,211,153,0.5)';
+            setTimeout(() => {
+              btn.textContent = original;
+              btn.style.color = '';
+              btn.style.borderColor = '';
+            }, 2000);
+          }).catch(() => {
+            prompt('Copy iptables firewall command:', cmd);
+          });
+        } else {
+          prompt('Copy iptables firewall command:', cmd);
+        }
+      });
+    });
+  }
+
+  async updateThreatSignatures() {
+    const btn = document.getElementById('btnUpdateThreatFeed');
+    const textEl = document.getElementById('btnUpdateThreatFeedText');
+    const dot = document.getElementById('threatFeedDot');
+
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('is-updating');
+    }
+    if (textEl) textEl.textContent = 'Syncing Feeds...';
+    if (dot) dot.classList.add('updating');
+
+    try {
+      const res = await fetch('/api/threats/update', { method: 'POST' });
+      if (res.ok) {
+        // Allow brief window for backend thread to complete fetch
+        await new Promise(r => setTimeout(r, 2200));
+        await this.fetchThreats();
+      }
+    } catch (err) {
+      console.warn('Threat signatures feed update error:', err);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('is-updating');
+      }
+      if (textEl) textEl.textContent = 'Sync Feeds';
+      if (dot) dot.classList.remove('updating');
+    }
+  }
+
+  async clearThreats() {
+    try {
+      const res = await fetch('/api/threats/clear', {
+        method: 'POST'
+      });
+      if (res.ok) {
+        await this.fetchThreats();
+        await this.generateAndCluster();
+        this.chart.clearFocusRelationship();
+      }
+    } catch (err) {
+      console.warn('Threat clear error:', err);
+    }
+  }
+
+  escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // ==========================================================================
