@@ -17,6 +17,7 @@ import json
 import socket
 import struct
 import os
+import hashlib
 import urllib.request
 import threading
 from collections import defaultdict, deque
@@ -212,8 +213,11 @@ class ThreatEngine:
         
         # 1. Warm-load disk cache if available for immediate packet sniffer readiness
         self._load_cache_from_disk()
-        
-        # 2. Launch background sync worker which runs an immediate live fetch on startup
+
+        # 2. Restore persisted threat history from SQLite database
+        self._load_threats_from_db()
+
+        # 3. Launch background sync worker which runs an immediate live fetch on startup
         #    and continues recurring updates at the scheduled interval.
         self.feed_thread = threading.Thread(target=self._feed_sync_worker, daemon=True, name="ThreatFeedSync")
         self.feed_thread.start()
@@ -294,6 +298,31 @@ class ThreatEngine:
         except Exception as e:
             print(f"[ThreatEngine] Notice: Could not read signatures cache ({e}). Will fetch fresh feeds.")
             return False
+
+    def _load_threats_from_db(self):
+        """Restore persisted threat records from SQLite database so threats persist across restarts."""
+        if not self.db:
+            return
+        try:
+            stored_threats = self.db.get_threats(limit=500)
+            if not stored_threats:
+                return
+            with self.lock:
+                for t in reversed(stored_threats):  # append in chronological order
+                    sig = t.get('signature', '')
+                    src = t.get('srcIp', '')
+                    dst = t.get('destIp', '')
+                    dport = t.get('destPort', 0)
+                    dedup_key = (sig, src, dst, dport)
+                    self.active_threat_map[dedup_key] = t
+                    self.recent_threats.appendleft(t)
+                    hits = t.get('hitCount', 1)
+                    self.total_threats_detected += hits
+                    sev = (t.get('severity') or 'MEDIUM').upper()
+                    self.threat_counts_by_severity[sev] += hits
+            print(f"[ThreatEngine] Loaded {len(stored_threats)} persisted threat events from SQLite database.")
+        except Exception as e:
+            print(f"[ThreatEngine] Notice: Could not load stored threats from database: {e}")
 
     def _save_cache_to_disk(self):
         """Persist current compiled signatures, CVEs, and reputation IPs to disk."""
@@ -583,18 +612,20 @@ class ThreatEngine:
     def record_threat_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """Record and deduplicate a detected threat event, persisting to SQLite if available."""
         now = time.time()
-        event_id = event.get('id') or f"threat_{int(now)}_{hash(event.get('signature', '')) & 0xFFFFFF:06x}"
-        event['id'] = event_id
-        event['timestamp'] = now
-        event['isoTime'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
-        event['timeStr'] = time.strftime('%H:%M:%S', time.localtime(now))
-        
         sig_name = event.get('signature', 'Unknown')
         src_ip = event.get('srcIp', '0.0.0.0')
         dst_ip = event.get('destIp', '0.0.0.0')
         dst_port = event.get('destPort', 0)
         
         dedup_key = (sig_name, src_ip, dst_ip, dst_port)
+        key_str = f"{sig_name}|{src_ip}|{dst_ip}|{dst_port}"
+        hash_suffix = hashlib.md5(key_str.encode('utf-8')).hexdigest()[:12]
+        event_id = event.get('id') or f"threat_{hash_suffix}"
+        
+        event['id'] = event_id
+        event['timestamp'] = now
+        event['isoTime'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
+        event['timeStr'] = time.strftime('%H:%M:%S', time.localtime(now))
 
         with self.lock:
             self.total_threats_detected += 1
@@ -606,23 +637,29 @@ class ThreatEngine:
                 existing['hitCount'] = existing.get('hitCount', 1) + 1
                 existing['lastSeen'] = now
                 existing['lastSeenStr'] = event['timeStr']
-                return existing
+                existing['timestamp'] = now
+                existing['isoTime'] = event['isoTime']
+                existing['timeStr'] = event['timeStr']
+                if event.get('matchedPayload'):
+                    existing['matchedPayload'] = event['matchedPayload']
+                event_to_persist = existing
             else:
-                event['hitCount'] = 1
+                event['hitCount'] = event.get('hitCount', 1)
                 event['firstSeen'] = now
                 event['lastSeen'] = now
                 event['lastSeenStr'] = event['timeStr']
                 self.active_threat_map[dedup_key] = event
                 self.recent_threats.appendleft(event)
+                event_to_persist = event
 
         # Persist to SQLite database
         if self.db:
             try:
-                self.db.record_threat(event)
+                self.db.record_threat(event_to_persist)
             except Exception:
                 pass
 
-        return event
+        return event_to_persist
 
     def inspect_packet(self, proto: str, src_ip: str, src_port: int, dst_ip: str, dst_port: int, 
                        payload: bytes, process: Optional[str] = None, tcp_flags: int = 0) -> Optional[Dict[str, Any]]:
@@ -761,26 +798,36 @@ class ThreatEngine:
 
         return None
 
-    def get_threats_summary(self) -> Dict[str, Any]:
-        """Return structured summary of active threats and system counts."""
-        now = time.time()
+    def get_threats_summary(self, limit: int = 200) -> Dict[str, Any]:
+        """Return structured summary of active and persisted threats and system counts."""
         with self.lock:
-            recent_list = [t for t in self.recent_threats if now - t.get('lastSeen', t.get('timestamp', 0)) <= 600.0]
-            
-            critical_count = sum(1 for t in recent_list if t.get('severity') == 'CRITICAL')
-            high_count = sum(1 for t in recent_list if t.get('severity') == 'HIGH')
-            medium_count = sum(1 for t in recent_list if t.get('severity') == 'MEDIUM')
-            low_count = sum(1 for t in recent_list if t.get('severity') == 'LOW')
-            
+            threats_list = list(self.recent_threats)[:limit]
+            if not threats_list and self.db:
+                try:
+                    db_items = self.db.get_threats(limit=limit)
+                    if db_items:
+                        for item in reversed(db_items):
+                            k = (item.get('signature', ''), item.get('srcIp', ''), item.get('destIp', ''), item.get('destPort', 0))
+                            self.active_threat_map[k] = item
+                            self.recent_threats.appendleft(item)
+                        threats_list = list(self.recent_threats)[:limit]
+                except Exception:
+                    pass
+
+            critical_count = sum(1 for t in threats_list if (t.get('severity') or '').upper() == 'CRITICAL')
+            high_count = sum(1 for t in threats_list if (t.get('severity') or '').upper() == 'HIGH')
+            medium_count = sum(1 for t in threats_list if (t.get('severity') or '').upper() == 'MEDIUM')
+            low_count = sum(1 for t in threats_list if (t.get('severity') or '').upper() == 'LOW')
+
             affected_ips = set()
-            for t in recent_list:
+            for t in threats_list:
                 if t.get('srcIp'):
                     affected_ips.add(t['srcIp'])
                 if t.get('destIp'):
                     affected_ips.add(t['destIp'])
 
             return {
-                'activeThreatsCount': len(recent_list),
+                'activeThreatsCount': len(threats_list),
                 'criticalCount': critical_count,
                 'highCount': high_count,
                 'mediumCount': medium_count,
@@ -799,7 +846,7 @@ class ThreatEngine:
                 'nextUpdateDue': self.next_update_due,
                 'nextUpdateStr': time.strftime('%H:%M:%S', time.localtime(self.next_update_due)) if self.next_update_due else "Pending",
                 'updateIntervalHours': round(self.update_interval / 3600.0, 1),
-                'threats': recent_list[:100]
+                'threats': threats_list
             }
 
 

@@ -341,7 +341,9 @@ class NetworkHistoryDB:
                             hit_count = hit_count + 1,
                             timestamp = excluded.timestamp,
                             iso_time = excluded.iso_time,
-                            time_str = excluded.time_str;
+                            time_str = excluded.time_str,
+                            matched_payload = excluded.matched_payload,
+                            details_json = excluded.details_json;
                     """, (
                         event_id, now, iso_time, time_str,
                         threat.get('severity', 'MEDIUM'),

@@ -1851,6 +1851,10 @@ class NetworkClusterApp {
     if (this.threatDrawer) this.threatDrawer.classList.add('open');
     if (this.threatDrawerBackdrop) this.threatDrawerBackdrop.classList.add('open');
 
+    // Immediately display persisted threats already loaded in memory
+    this.renderThreatsContent();
+
+    // Fetch full persisted threat history from the backend
     await this.fetchThreats();
     this.renderThreatsContent();
   }
@@ -1862,10 +1866,34 @@ class NetworkClusterApp {
 
   updateThreatsData(threatSummary) {
     if (!threatSummary) return;
-    const activeCount = threatSummary.count || 0;
-    const threats = threatSummary.active || [];
-    const stats = threatSummary.stats || {};
-    const inspected = threatSummary.inspectedPackets || 0;
+
+    // Extract threats array from any potential property (summary.threats, active, or dbThreats)
+    let threats = [];
+    if (Array.isArray(threatSummary)) {
+      threats = threatSummary;
+    } else if (Array.isArray(threatSummary.threats)) {
+      threats = threatSummary.threats;
+    } else if (Array.isArray(threatSummary.active)) {
+      threats = threatSummary.active;
+    } else if (Array.isArray(threatSummary.dbThreats)) {
+      threats = threatSummary.dbThreats;
+    }
+
+    // Never wipe out populated threats with an empty list from telemetry polling
+    if (threats.length === 0 && this.threatData && Array.isArray(this.threatData.threats) && this.threatData.threats.length > 0) {
+      threats = this.threatData.threats;
+    }
+
+    const activeCount = threatSummary.activeThreatsCount !== undefined
+      ? threatSummary.activeThreatsCount
+      : (threatSummary.count !== undefined ? threatSummary.count : threats.length);
+
+    const stats = threatSummary.stats || (this.threatData && this.threatData.stats) || {};
+    const inspected = threatSummary.totalInspectedPackets !== undefined
+      ? threatSummary.totalInspectedPackets
+      : (threatSummary.inspectedPackets !== undefined
+        ? threatSummary.inspectedPackets
+        : (this.threatData?.inspectedPackets || 0));
 
     // Update Header and Sidebar Threat Counts
     if (this.headerThreatCount) {
@@ -1891,11 +1919,11 @@ class NetworkClusterApp {
       threats: threats,
       stats: stats,
       inspectedPackets: inspected,
-      summary: threatSummary.summary || {}
+      summary: threatSummary.summary || threatSummary || {}
     };
 
     // Update Live Feed Status Bar elements
-    const summary = threatSummary.summary || {};
+    const summary = threatSummary.summary || (threatSummary.feedStatus ? threatSummary : (this.threatData?.summary || {}));
     const rulesCountEl = document.getElementById('threatRulesLoadedCount');
     const cvesCountEl = document.getElementById('threatCvesTrackedCount');
     const feedDotEl = document.getElementById('threatFeedDot');
@@ -1954,10 +1982,32 @@ class NetworkClusterApp {
       if (res.ok) {
         const data = await res.json();
         const summary = data.summary || {};
-        const activeThreats = summary.threats || data.threats || [];
-        const activeCount = summary.activeThreatsCount !== undefined
-          ? summary.activeThreatsCount
-          : (data.count !== undefined ? data.count : activeThreats.length);
+        
+        // Merge summary.threats and data.dbThreats to guarantee complete persistence
+        const threatsMap = new Map();
+        const addThreat = (t) => {
+          if (!t) return;
+          const k = t.id || `${t.signature}|${t.srcIp}|${t.destIp}|${t.destPort}`;
+          if (!threatsMap.has(k)) {
+            threatsMap.set(k, t);
+          } else {
+            const prev = threatsMap.get(k);
+            if ((t.hitCount || 1) >= (prev.hitCount || 1)) {
+              threatsMap.set(k, { ...prev, ...t });
+            }
+          }
+        };
+
+        if (Array.isArray(summary.threats)) summary.threats.forEach(addThreat);
+        if (Array.isArray(data.dbThreats)) data.dbThreats.forEach(addThreat);
+        if (Array.isArray(data.threats)) data.threats.forEach(addThreat);
+
+        const allThreats = Array.from(threatsMap.values());
+
+        const activeCount = summary.activeThreatsCount !== undefined && summary.activeThreatsCount > 0
+          ? Math.max(summary.activeThreatsCount, allThreats.length)
+          : allThreats.length;
+
         const stats = data.dbStats || data.stats || {};
         const inspected = summary.totalInspectedPackets !== undefined
           ? summary.totalInspectedPackets
@@ -1965,7 +2015,8 @@ class NetworkClusterApp {
 
         this.updateThreatsData({
           count: activeCount,
-          active: activeThreats,
+          active: allThreats,
+          threats: allThreats,
           stats: stats,
           inspectedPackets: inspected,
           summary: summary

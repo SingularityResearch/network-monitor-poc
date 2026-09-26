@@ -167,9 +167,13 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             limit = int(limit_val) if limit_val.isdigit() else 100
             severity = params.get('severity', [None])[0]
             
-            threats_summary = threat_engine.get_threats_summary() if threat_engine else {}
+            threats_summary = threat_engine.get_threats_summary(limit=limit) if threat_engine else {}
             db_threats = db.get_threats(limit=limit, severity=severity)
             
+            if threats_summary and not threats_summary.get('threats') and db_threats:
+                threats_summary['threats'] = db_threats
+                threats_summary['activeThreatsCount'] = len(db_threats)
+
             self.send_json_response({
                 'status': 'ok',
                 'summary': threats_summary,
