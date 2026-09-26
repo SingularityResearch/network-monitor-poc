@@ -2283,6 +2283,19 @@ canvas#clusterCanvas {
   box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
 }
 
+.threat-generate-btn {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.threat-generate-btn:hover {
+  background: rgba(239, 68, 68, 0.28);
+  border-color: rgba(239, 68, 68, 0.8);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.45);
+}
+
 .threat-feed-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;

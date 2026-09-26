@@ -163,26 +163,21 @@ class RawPacketSniffer:
             # Create raw packet socket capturing all Layer 2 Ethernet frames
             self.sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
             
+            # Enter promiscuous mode on active physical interface
             if self.iface:
                 try:
-                    self.sock.bind((self.iface, 0))
+                    if_idx = socket.if_nametoindex(self.iface)
+                    mreq = struct.pack("IHH8s", if_idx, PACKET_MR_PROMISC, 0, b"")
+                    self.sock.setsockopt(SOL_PACKET, PACKET_ADD_MEMBERSHIP, mreq)
                 except Exception:
                     pass
-                
-                # Enter promiscuous mode at the socket layer
-                if self.promiscuous:
-                    try:
-                        if_idx = socket.if_nametoindex(self.iface)
-                        mreq = struct.pack("IHH8s", if_idx, PACKET_MR_PROMISC, 0, b"")
-                        self.sock.setsockopt(SOL_PACKET, PACKET_ADD_MEMBERSHIP, mreq)
-                    except Exception:
-                        pass
 
             self.sock.settimeout(0.5)
             self.is_running = True
             self.status = "active"
             promisc_label = "promiscuous" if self.promiscuous else "standard"
-            self.status_message = f"Capturing on {self.iface} ({promisc_label} mode)"
+            iface_label = f"all interfaces ({self.iface} {promisc_label})" if self.iface else "all interfaces"
+            self.status_message = f"Capturing on {iface_label}"
             
             self.thread = threading.Thread(target=self._capture_loop, daemon=True, name="RawPacketSniffer")
             self.thread.start()
@@ -1242,7 +1237,8 @@ class RealNetworkCollector:
         # Tag connections with threat status for hazard line rendering
         for c in connections:
             pair = (c.get('srcIP'), c.get('destIP'))
-            if pair in threat_by_pair or c.get('srcIP') in threat_by_ip or c.get('destIP') in threat_by_ip:
+            rev_pair = (c.get('destIP'), c.get('srcIP'))
+            if pair in threat_by_pair or rev_pair in threat_by_pair:
                 c['hasThreat'] = True
                 c_threat = threat_by_ip.get(c.get('srcIP')) or threat_by_ip.get(c.get('destIP'))
                 if c_threat:

@@ -95,6 +95,7 @@ class ThreatSignature:
                  fast_patterns: Optional[List[bytes]] = None,
                  regex_patterns: Optional[List[re.Pattern]] = None,
                  cve: Optional[str] = None,
+                 min_dsize: Optional[int] = None,
                  recommendation: str = ""):
         self.sid = sid
         self.name = name
@@ -105,10 +106,11 @@ class ThreatSignature:
         self.fast_patterns = [p.lower() if isinstance(p, bytes) else p.encode('utf-8').lower() for p in (fast_patterns or [])]
         self.regex_patterns = regex_patterns or []
         self.cve = cve
+        self.min_dsize = min_dsize
         self.recommendation = recommendation
 
     def matches(self, proto: str, src_port: int, dst_port: int, payload: bytes) -> Optional[str]:
-        """Fast-path check: protocol -> port -> fast substring -> regex."""
+        """Fast-path check: protocol -> port -> min_dsize -> fast substring -> regex."""
         if self.proto != 'ANY' and self.proto != proto:
             return None
             
@@ -119,17 +121,16 @@ class ThreatSignature:
         if not payload:
             return None
 
+        if self.min_dsize and len(payload) < self.min_dsize:
+            return None
+
         payload_lower = payload.lower()
         
-        # Fast substring check
+        # Fast substring check - all content patterns must be present
         if self.fast_patterns:
-            matched_fast = False
             for fp in self.fast_patterns:
-                if fp in payload_lower:
-                    matched_fast = True
-                    break
-            if not matched_fast:
-                return None
+                if fp not in payload_lower:
+                    return None
 
         # Regex validation if regex patterns were defined
         if self.regex_patterns:
@@ -255,7 +256,7 @@ class ThreatEngine:
             tracked_cves: Set[str] = set()
 
             for item in sigs_data:
-                fast_patterns = [bytes.fromhex(h) for h in item.get('fast_patterns_hex', [])]
+                fast_patterns = [bytes.fromhex(h) for h in item.get('fast_patterns_hex', []) if bytes.fromhex(h) != b'\x00' * len(bytes.fromhex(h)) and len(bytes.fromhex(h)) >= 2]
                 regex_patterns = []
                 for p in item.get('regex_patterns', []):
                     try:
@@ -264,6 +265,17 @@ class ThreatEngine:
                         pass
                 
                 ports = set(item['ports']) if item.get('ports') else None
+                GENERIC_TOKENS = {b'get', b'post', b'head', b'put', b'delete', b'options', b'http', b'http/', b'http/1.0', b'http/1.1'}
+                if not fast_patterns or all(p in GENERIC_TOKENS for p in fast_patterns):
+                    continue
+                if max(len(p) for p in fast_patterns) < 4 or sum(len(p) for p in fast_patterns) < 6:
+                    continue
+
+                min_dsize = item.get('min_dsize')
+                if ports and 53 in ports:
+                    has_meaningful_text = any(len([b for b in p if 32 <= b <= 126]) >= 4 for p in fast_patterns)
+                    if not has_meaningful_text and (not min_dsize or min_dsize < 512):
+                        continue
                 sig = ThreatSignature(
                     sid=item['sid'],
                     name=item['name'],
@@ -274,6 +286,7 @@ class ThreatEngine:
                     fast_patterns=fast_patterns,
                     regex_patterns=regex_patterns,
                     cve=item.get('cve'),
+                    min_dsize=item.get('min_dsize'),
                     recommendation=item.get('recommendation', '')
                 )
                 loaded_sigs.append(sig)
@@ -339,6 +352,7 @@ class ThreatEngine:
                         'ports': list(s.ports) if s.ports else None,
                         'fast_patterns_hex': [p.hex() for p in s.fast_patterns],
                         'cve': s.cve,
+                        'min_dsize': s.min_dsize,
                         'recommendation': s.recommendation
                     })
                 
@@ -383,9 +397,21 @@ class ThreatEngine:
             if proto in ('HTTP', 'TLS', 'SSL'):
                 proto = 'TCP'
 
-            dst_port_str = header[5]
-            ports = parse_rule_ports(dst_port_str)
+            # Suricata header: alert <proto> <src_ip> <src_port> -> <dst_ip> <dst_port>
+            src_ports = parse_rule_ports(header[3]) if len(header) >= 4 else None
+            dst_ports = parse_rule_ports(header[6]) if len(header) >= 7 else None
+            ports = dst_ports or src_ports
             opts = line[h_end+1:-1]
+
+            # Extract dsize constraint if present (e.g. dsize:>2048)
+            dsize_gt_m = re.search(r'dsize:\s*>(\d+)', opts)
+            min_dsize = int(dsize_gt_m.group(1)) if dsize_gt_m else None
+
+            # Also extract isdataat constraint (e.g. isdataat:2049)
+            isdataat_m = re.search(r'isdataat:\s*(\d+)', opts)
+            if isdataat_m:
+                idata = int(isdataat_m.group(1))
+                min_dsize = max(min_dsize or 0, idata)
 
             msg_m = re.search(r'msg:\s*\"([^\"]+)\"', opts)
             msg = msg_m.group(1) if msg_m else 'ET Exploit Attempt'
@@ -405,9 +431,23 @@ class ThreatEngine:
                     cve = cve_in_msg.group(1).upper()
 
             contents = re.findall(r'content:\s*\"([^\"]+)\"', opts)
-            fast_patterns = [parse_suricata_content(c).lower() for c in contents if len(parse_suricata_content(c)) >= 3]
+            parsed_contents = [parse_suricata_content(c).lower() for c in contents]
+            fast_patterns = [p for p in parsed_contents if len(p) >= 2 and p != b'\x00' * len(p)]
             if not fast_patterns:
                 continue
+
+            # Filter out rules whose patterns are generic HTTP tokens, low entropy, or pure nulls
+            GENERIC_TOKENS = {b'get', b'post', b'head', b'put', b'delete', b'options', b'http', b'http/', b'http/1.0', b'http/1.1'}
+            if all(p in GENERIC_TOKENS for p in fast_patterns):
+                continue
+            if max(len(p) for p in fast_patterns) < 4 or sum(len(p) for p in fast_patterns) < 6:
+                continue
+
+            # Filter out DNS (port 53) false positives lacking sufficient text or large payload threshold
+            if ports and 53 in ports:
+                has_meaningful_text = any(len([b for b in p if 32 <= b <= 126]) >= 4 for p in fast_patterns)
+                if not has_meaningful_text and (not min_dsize or min_dsize < 512):
+                    continue
 
             # Classify severity & category
             classtype_m = re.search(r'classtype:\s*([^;]+)', opts)
@@ -448,6 +488,7 @@ class ThreatEngine:
                 ports=ports,
                 fast_patterns=fast_patterns,
                 cve=cve,
+                min_dsize=min_dsize,
                 recommendation=recommendation
             ))
 

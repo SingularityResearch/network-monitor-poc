@@ -240,6 +240,52 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json_response({'status': 'cleared', 'message': 'Active threats buffer cleared'})
             return
 
+        elif parsed.path == '/api/threats/generate':
+            params = urllib.parse.parse_qs(parsed.query)
+            count_param = params.get('count', [None])[0]
+            rate_param = params.get('rate', [None])[0]
+            mode_param = params.get('mode', [None])[0]
+
+            body_data = {}
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                try:
+                    body = self.rfile.read(content_length).decode('utf-8')
+                    body_data = json.loads(body)
+                except Exception:
+                    pass
+
+            count = int(body_data.get('count') or count_param or 60)
+            rate = float(body_data.get('rate') or rate_param or 20.0)
+            mode = body_data.get('mode') or mode_param or 'burst'
+
+            try:
+                from traffic_generator import generator
+                if mode == 'continuous':
+                    generator.start_continuous(rate_per_sec=rate)
+                    self.send_json_response({
+                        'status': 'started_continuous',
+                        'message': f'Continuous exploit traffic generator started at {rate} pkts/sec',
+                        'stats': generator.stats
+                    })
+                elif mode == 'stop':
+                    generator.stop_continuous()
+                    self.send_json_response({
+                        'status': 'stopped',
+                        'message': 'Continuous exploit traffic generator stopped',
+                        'stats': generator.stats
+                    })
+                else:
+                    threading.Thread(target=generator.run_burst, kwargs={'count': count, 'rate_per_sec': rate}, daemon=True).start()
+                    self.send_json_response({
+                        'status': 'generating',
+                        'message': f'Emitting burst of {count} inbound & outbound exploits at {rate} pkts/sec',
+                        'count': count
+                    })
+            except Exception as e:
+                self.send_json_response({'status': 'error', 'message': str(e)}, status_code=500)
+            return
+
         self.send_response(404)
         self.end_headers()
 

@@ -642,6 +642,10 @@ class NetworkClusterApp {
     this.btnUpdateThreatFeed = document.getElementById('btnUpdateThreatFeed');
     this.btnUpdateThreatFeed?.addEventListener('click', () => this.updateThreatSignatures());
 
+    // Generate Exploit & Threat Traffic Test Trigger
+    this.btnGenerateThreatTraffic = document.getElementById('btnGenerateThreatTraffic');
+    this.btnGenerateThreatTraffic?.addEventListener('click', () => this.injectThreatTraffic());
+
     // Threat Tabs
     const threatTabs = [
       { btn: this.tabThreatAll, tab: 'all' },
@@ -2222,6 +2226,32 @@ class NetworkClusterApp {
       }
       if (textEl) textEl.textContent = 'Sync Feeds';
       if (dot) dot.classList.remove('updating');
+    }
+  }
+
+  async injectThreatTraffic(count = 50, rate = 20) {
+    const btn = document.getElementById('btnGenerateThreatTraffic');
+    const textEl = document.getElementById('btnGenerateThreatTrafficText');
+
+    if (btn) btn.disabled = true;
+    if (textEl) textEl.textContent = 'Injecting Exploit Traffic...';
+
+    try {
+      const res = await fetch(`/api/threats/generate?count=${count}&rate=${rate}&mode=burst`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        for (let i = 0; i < 4; i++) {
+          await new Promise(r => setTimeout(r, 500));
+          await this.fetchThreats();
+          await this.generateAndCluster();
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to inject threat traffic:', err);
+    } finally {
+      if (btn) btn.disabled = false;
+      if (textEl) textEl.textContent = 'Inject Threat Traffic';
     }
   }
 
