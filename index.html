@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   
-  <link rel="stylesheet" href="styles.css?v=20260925_rel">
+  <link rel="stylesheet" href="styles.css?v=20260927_inbound">
 </head>
 <body>
 
@@ -62,6 +62,11 @@
 
       <!-- Quick Action Buttons: Threat Center, Relationships Explorer, Deep Socket Inspector & Alert Center -->
       <div class="header-action-group">
+        <a href="https://enlarge-disciplines-executive-watches.trycloudflare.com/" target="_blank" rel="noopener noreferrer" class="header-action-btn cf-gateway-btn" id="btnCfGateway" title="Public Cloudflare Edge Gateway (Always Online)">
+          <span class="cf-gateway-pulse"></span>
+          <span>☁️ Cloudflare Gateway</span>
+        </a>
+
         <button class="header-action-btn threat-shield-btn" id="btnOpenThreats" title="Threat &amp; Exploit Detection Center (ET Open IDS)">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -70,6 +75,16 @@
           </svg>
           <span>Threats</span>
           <span class="alert-count-pill threat-pill" id="headerThreatCount" style="background: rgba(239, 68, 68, 0.25); color: #ef4444; border-color: rgba(239, 68, 68, 0.4);">0</span>
+        </button>
+
+        <button class="header-action-btn inbound-report-btn" id="btnOpenInboundReport" title="Inbound Connections & Geo Location Report">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="8 12 12 16 16 12"></polyline>
+            <line x1="12" y1="8" x2="12" y2="16"></line>
+          </svg>
+          <span>Inbound</span>
+          <span class="alert-count-pill" id="headerInboundCount" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: rgba(16, 185, 129, 0.35);">0</span>
         </button>
 
         <button class="header-action-btn relationships-btn" id="btnOpenRelationships" title="Network Relationship &amp; Correlation Explorer">
@@ -217,6 +232,17 @@
             <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
           <span style="color: #f87171; font-weight: 600;">Threat Shield (<span id="sidebarThreatCount">0</span>)</span>
+        </button>
+      </div>
+
+      <div style="display: flex; gap: 6px; margin-bottom: 0.85rem;">
+        <button class="btn btn-secondary" id="btnSidebarInbound" style="flex: 1; font-size: 0.76rem; padding: 0.45rem 0.5rem; border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.1);" title="Inbound Connections & Geo Location Report">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="8 12 12 16 16 12"></polyline>
+            <line x1="12" y1="8" x2="12" y2="16"></line>
+          </svg>
+          <span style="color: #34d399; font-weight: 600;">Inbound Report (<span id="sidebarInboundCount">0</span>)</span>
         </button>
       </div>
 
@@ -862,6 +888,178 @@
     </div>
   </aside>
 
+  <!-- Inbound Connections & Geo Location Report Drawer -->
+  <div class="inspector-drawer-backdrop" id="inboundDrawerBackdrop"></div>
+  <aside class="inspector-drawer inbound-drawer" id="inboundDrawer">
+    <div class="inspector-header">
+      <div class="inspector-title-area">
+        <div class="inspector-badge" style="color: #34d399;">
+          <span class="live-dot" style="background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
+          <span>INGRESS GEO &amp; VISITOR INTELLIGENCE</span>
+        </div>
+        <h3 id="inboundDrawerTitle">Inbound Connections &amp; Origin Report</h3>
+        <p id="inboundDrawerSubtitle">Track, search, and analyze incoming traffic across <a href="https://enlarge-disciplines-executive-watches.trycloudflare.com/" target="_blank" rel="noopener noreferrer" style="color: #38bdf8; text-decoration: underline; font-weight: 600;">Cloudflare Gateway (enlarge-disciplines-executive-watches.trycloudflare.com)</a>, listening sockets, and ingress packets</p>
+      </div>
+      <div class="inspector-header-actions">
+        <button class="btn btn-secondary inbound-action-btn" id="btnRefreshInbound" title="Refresh Inbound Report">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          <span>Refresh</span>
+        </button>
+        <button class="btn btn-secondary inbound-action-btn" id="btnExportInboundCsv" title="Export Inbound Connection Report as CSV">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span>Export CSV</span>
+        </button>
+        <button class="inspector-close-btn" id="btnCloseInboundDrawer" title="Close Inbound Report">✕</button>
+      </div>
+    </div>
+
+    <!-- Inbound KPI Summary Grid -->
+    <div class="inbound-summary-grid">
+      <div class="inbound-kpi-card">
+        <div class="inbound-kpi-val" id="inboundKpiTotal">0</div>
+        <div class="inbound-kpi-label">Inbound Flows</div>
+        <div class="inbound-kpi-sub" id="inboundKpiHits">0 total hits</div>
+      </div>
+      <div class="inbound-kpi-card">
+        <div class="inbound-kpi-val highlight-cyan" id="inboundKpiUniqueIps">0</div>
+        <div class="inbound-kpi-label">Unique Client IPs</div>
+        <div class="inbound-kpi-sub" id="inboundKpiSources">Cloudflare / Sockets</div>
+      </div>
+      <div class="inbound-kpi-card">
+        <div class="inbound-kpi-val highlight-emerald" id="inboundKpiTopCountry" style="font-size:0.92rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">--</div>
+        <div class="inbound-kpi-label">Top Origin Country</div>
+        <div class="inbound-kpi-sub" id="inboundKpiCountryHits">--</div>
+      </div>
+      <div class="inbound-kpi-card">
+        <div class="inbound-kpi-val highlight-purple" id="inboundKpiTopRegion" style="font-size:0.92rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">--</div>
+        <div class="inbound-kpi-label">Top State / Region</div>
+        <div class="inbound-kpi-sub" id="inboundKpiRegionHits">--</div>
+      </div>
+      <div class="inbound-kpi-card">
+        <div class="inbound-kpi-val highlight-red" id="inboundKpiThreats">0</div>
+        <div class="inbound-kpi-label">Inbound Threats</div>
+        <div class="inbound-kpi-sub" id="inboundKpiThreatPct">0% of ingress</div>
+      </div>
+      <div class="inbound-kpi-card">
+        <div class="inbound-kpi-val highlight-amber" id="inboundKpiBytes">0 B</div>
+        <div class="inbound-kpi-label">Data Ingested</div>
+        <div class="inbound-kpi-sub" id="inboundKpiBytesSub">48h rolling retention</div>
+      </div>
+    </div>
+
+    <!-- Geographical Distribution Quick-Chips Bar -->
+    <div class="inbound-geo-chips-bar" id="inboundGeoChipsBar">
+      <div class="inbound-chips-section">
+        <span class="inbound-chips-label">🌍 Top Countries:</span>
+        <div class="inbound-chips-list" id="inboundCountryChips">
+          <!-- Dynamically populated chips -->
+        </div>
+      </div>
+      <div class="inbound-chips-section">
+        <span class="inbound-chips-label">📍 Top States:</span>
+        <div class="inbound-chips-list" id="inboundStateChips">
+          <!-- Dynamically populated chips -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Multi-Faceted Filter Toolbar -->
+    <div class="inbound-filter-toolbar">
+      <div class="inbound-search-box">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="inboundSearchInput" placeholder="Search by Country, State, IP, City, Port, Service, ASN, Path...">
+        <button class="inbound-search-clear" id="btnInboundSearchClear" title="Clear Search">✕</button>
+      </div>
+
+      <div class="inbound-select-group">
+        <select id="inboundCountrySelect" class="styled-select inbound-select" title="Filter by Country">
+          <option value="">🌐 All Countries</option>
+        </select>
+
+        <select id="inboundRegionSelect" class="styled-select inbound-select" title="Filter by State or Region">
+          <option value="">📍 All States / Regions</option>
+        </select>
+
+        <select id="inboundPortSelect" class="styled-select inbound-select" title="Filter by Destination Port">
+          <option value="">🔌 All Target Ports</option>
+        </select>
+
+        <select id="inboundThreatSelect" class="styled-select inbound-select" title="Filter by Threat Severity">
+          <option value="all">🛡️ All Inbound Traffic</option>
+          <option value="threats">🔴 Threats Only</option>
+          <option value="benign">🟢 Benign Only</option>
+        </select>
+
+        <select id="inboundSourceSelect" class="styled-select inbound-select" title="Filter by Telemetry Ingress Source">
+          <option value="">📡 All Ingress Sources</option>
+          <option value="cloudflare">☁️ Cloudflare Tunnel</option>
+          <option value="http">🌐 Direct HTTP</option>
+          <option value="socket">🔌 Kernel Socket (ss)</option>
+          <option value="packet">📦 Raw Packet Sniffer</option>
+          <option value="threat_engine">🛡️ Threat Engine</option>
+        </select>
+
+        <select id="inboundTimeSelect" class="styled-select inbound-select" title="Filter by Retention Time Window">
+          <option value="172800" selected>⏱️ Last 48 Hours</option>
+          <option value="86400">⏱️ Last 24 Hours</option>
+          <option value="21600">⏱️ Last 6 Hours</option>
+          <option value="3600">⏱️ Last 1 Hour</option>
+          <option value="900">⏱️ Last 15 Mins</option>
+        </select>
+
+        <button class="btn btn-secondary inbound-reset-btn" id="btnResetInboundFilters" title="Reset all filters">
+          Reset
+        </button>
+      </div>
+    </div>
+
+    <!-- Inbound Results Bar -->
+    <div class="inbound-results-bar">
+      <span id="inboundResultsCount">Showing 0 inbound connections</span>
+      <span class="inbound-active-filter-tag" id="inboundActiveFilterTag" style="display:none;"></span>
+    </div>
+
+    <!-- Scrollable Inbound Table Container -->
+    <div class="inbound-table-container" id="inboundTableContainer">
+      <table class="inbound-table">
+        <thead>
+          <tr>
+            <th>Origin (Country &amp; State)</th>
+            <th>Client IP &amp; Port</th>
+            <th>Target Port / Service</th>
+            <th>Protocol &amp; Source</th>
+            <th>Threat Status</th>
+            <th>Hits / Volume</th>
+            <th>First &amp; Last Seen</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="inboundTableBody">
+          <!-- Dynamically populated -->
+        </tbody>
+      </table>
+      <div class="inbound-empty-state" id="inboundEmptyState" style="display: none;">
+        <div style="font-size: 2.2rem; margin-bottom: 0.5rem;">🌍</div>
+        <h4 style="margin: 0; color: #f1f5f9; font-size: 1rem;">No Inbound Connections Match Criteria</h4>
+        <p style="margin: 0.35rem 0 0.8rem 0; font-size: 0.8rem; color: var(--text-muted);">
+          Try clearing your search query or adjusting country/state/port filters.
+        </p>
+        <button class="btn btn-secondary" id="btnInboundEmptyReset" style="font-size: 0.78rem; padding: 0.4rem 0.8rem;">
+          Reset Filters
+        </button>
+      </div>
+    </div>
+  </aside>
+
   <!-- Alerts Drawer -->
 
   <div class="alerts-drawer-backdrop" id="alertsBackdrop"></div>
@@ -885,6 +1083,6 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Application Logic Modules -->
-  <script type="module" src="app.js?v=20260925_rel"></script>
+  <script type="module" src="app.js?v=20260927_inbound"></script>
 </body>
 </html>

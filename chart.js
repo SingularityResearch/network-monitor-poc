@@ -783,7 +783,7 @@ export class NetworkClusterChart {
       let geoHtml = '';
       if (node.geo && !node.isInternal) {
         const flag = node.geo.flag || '🌐';
-        const loc = [node.geo.city, node.geo.country].filter(Boolean).join(', ');
+        const loc = [node.geo.city, node.geo.region, node.geo.country].filter(Boolean).join(', ');
         const asnPill = node.geo.asn
           ? `<span style="background:rgba(168,85,247,0.22);color:#c084fc;padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px;">${node.geo.asn}</span>`
           : '';
@@ -886,7 +886,7 @@ export class NetworkClusterChart {
       let destGeoHtml = '';
       if (destNode.geo && !destNode.isInternal) {
         const flag = destNode.geo.flag || '🌐';
-        const loc = [destNode.geo.city, destNode.geo.country].filter(Boolean).join(', ');
+        const loc = [destNode.geo.city, destNode.geo.region, destNode.geo.country].filter(Boolean).join(', ');
         const orgDesc = destNode.geo.org || destNode.geo.isp || '';
         destGeoHtml = `
           <div style="display:flex;justify-content:space-between;margin-top:2px;">

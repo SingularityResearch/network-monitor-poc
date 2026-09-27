@@ -24,6 +24,71 @@ from database import db
 from threat_engine import threat_engine
 
 DEFAULT_PORT = 8080
+DEFAULT_CLOUDFLARE_URL = os.environ.get(
+    "CLOUDFLARE_TUNNEL_URL",
+    "https://enlarge-disciplines-executive-watches.trycloudflare.com/"
+)
+
+
+def get_running_cloudflared():
+    """Check if cloudflared is already running on the system."""
+    try:
+        out = subprocess.check_output(["pgrep", "-f", "cloudflared tunnel"], stderr=subprocess.DEVNULL).decode().strip()
+        for p in out.split():
+            if p.isdigit():
+                return int(p)
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(["pgrep", "-x", "cloudflared"], stderr=subprocess.DEVNULL).decode().strip()
+        for p in out.split():
+            if p.isdigit():
+                return int(p)
+    except Exception:
+        pass
+    return None
+
+
+def ensure_cloudflare_tunnel(port: int = DEFAULT_PORT) -> dict:
+    """
+    Ensure the Cloudflare tunnel is running and connected to the local server port.
+    Preserves existing tunnel process to retain the permanent trycloudflare.com URL.
+    """
+    existing_pid = get_running_cloudflared()
+    if existing_pid:
+        print(f"[serve.py] Cloudflare tunnel already active (PID {existing_pid}). Preserving active session.")
+        return {
+            "status": "active",
+            "pid": existing_pid,
+            "url": DEFAULT_CLOUDFLARE_URL,
+            "reused": True
+        }
+
+    # If cloudflared is not running, launch it detached
+    print(f"[serve.py] No active Cloudflare tunnel detected. Launching cloudflared for port {port}...")
+    try:
+        proc = subprocess.Popen(
+            ["cloudflared", "tunnel", "--url", f"http://localhost:{port}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+        print(f"[serve.py] Cloudflare tunnel launched in background (PID {proc.pid}).")
+        return {
+            "status": "started",
+            "pid": proc.pid,
+            "url": DEFAULT_CLOUDFLARE_URL,
+            "reused": False
+        }
+    except Exception as e:
+        print(f"[serve.py] Warning: Could not automatically launch cloudflared: {e}")
+        return {
+            "status": "failed",
+            "error": str(e),
+            "url": DEFAULT_CLOUDFLARE_URL,
+            "reused": False
+        }
+
 
 # Global network collector instance
 collector = RealNetworkCollector()
@@ -74,7 +139,35 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _track_inbound_request(self):
+        """Track inbound HTTP / Cloudflare request into Inbound Intelligence DB."""
+        try:
+            cf_ip = self.headers.get('CF-Connecting-IP')
+            xf_ip = self.headers.get('X-Forwarded-For')
+            client_ip = cf_ip or (xf_ip.split(',')[0].strip() if xf_ip else self.client_address[0])
+            client_port = self.client_address[1] if len(self.client_address) > 1 else 0
+
+            country_code = self.headers.get('CF-IPCountry')
+            city = self.headers.get('CF-IPCity')
+            region = self.headers.get('CF-Region') or self.headers.get('CF-Region-Code')
+            user_agent = self.headers.get('User-Agent', '')
+
+            collector.record_inbound_http(
+                client_ip=client_ip,
+                client_port=client_port,
+                local_port=DEFAULT_PORT,
+                country_code=country_code,
+                region=region,
+                city=city,
+                user_agent=user_agent,
+                path=self.path,
+                is_cf=bool(cf_ip)
+            )
+        except Exception:
+            pass
+
     def do_GET(self):
+        self._track_inbound_request()
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path == '/favicon.ico':
@@ -92,6 +185,9 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             resolve_geoip = params.get('resolve_geoip', ['true'])[0].lower() in ('true', '1', 'yes')
 
             data = collector.get_topology(scope=scope, target_k=target_k, resolve_dns=resolve_dns, resolve_geoip=resolve_geoip)
+            if isinstance(data, dict):
+                data.setdefault('meta', {})['cloudflareGatewayUrl'] = DEFAULT_CLOUDFLARE_URL
+                data['meta']['cloudflareRunning'] = bool(get_running_cloudflared())
 
             # Record snapshot to SQLite database (rate-limited to at most once per 3s)
             now = time.time()
@@ -103,6 +199,17 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     print(f"[serve.py] Warning recording snapshot: {err}")
 
             self.send_json_response(data)
+            return
+
+        elif parsed.path == '/api/gateway-info':
+            cf_pid = get_running_cloudflared()
+            self.send_json_response({
+                'status': 'online' if cf_pid else 'offline',
+                'gateway_url': DEFAULT_CLOUDFLARE_URL,
+                'cloudflared_running': bool(cf_pid),
+                'cloudflared_pid': cf_pid,
+                'local_port': DEFAULT_PORT
+            })
             return
 
         elif parsed.path == '/api/history/snapshots':
@@ -182,6 +289,96 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
+        elif parsed.path == '/api/inbound-report':
+            params = urllib.parse.parse_qs(parsed.query)
+            q = params.get('q', [None])[0] or params.get('search', [None])[0]
+            country = params.get('country', [None])[0]
+            region = params.get('state', [None])[0] or params.get('region', [None])[0]
+            ip = params.get('ip', [None])[0]
+            port_val = params.get('port', [None])[0]
+            port = int(port_val) if port_val and port_val.isdigit() else None
+            proto = params.get('proto', [None])[0]
+            threat_only = params.get('threat_only', ['false'])[0].lower() in ('true', '1', 'yes')
+            source_type = params.get('source_type', [None])[0]
+            since_val = params.get('since', [None])[0]
+            since = float(since_val) if since_val and since_val.replace('.', '', 1).isdigit() else None
+            limit_val = params.get('limit', ['500'])[0]
+            limit = int(limit_val) if limit_val.isdigit() else 500
+
+            report = db.get_inbound_report(
+                since=since,
+                limit=limit,
+                search=q,
+                country=country,
+                region=region,
+                ip=ip,
+                port=port,
+                proto=proto,
+                threat_only=threat_only,
+                source_type=source_type
+            )
+            self.send_json_response({
+                'status': 'ok',
+                'report': report
+            })
+            return
+
+        elif parsed.path == '/api/inbound-connections/export':
+            params = urllib.parse.parse_qs(parsed.query)
+            q = params.get('q', [None])[0] or params.get('search', [None])[0]
+            country = params.get('country', [None])[0]
+            region = params.get('state', [None])[0] or params.get('region', [None])[0]
+            ip = params.get('ip', [None])[0]
+            threat_only = params.get('threat_only', ['false'])[0].lower() in ('true', '1', 'yes')
+            report = db.get_inbound_report(limit=1000, search=q, country=country, region=region, ip=ip, threat_only=threat_only)
+            
+            import csv
+            import io
+            out = io.StringIO()
+            writer = csv.writer(out)
+            writer.writerow([
+                'Remote IP', 'Remote Port', 'Country', 'Country Code', 'State / Region',
+                'City', 'ASN', 'Organization', 'ISP', 'Local Port', 'Service',
+                'Protocol', 'Process', 'Traffic (Bytes Received)', 'Traffic (Bytes Sent)',
+                'Hits', 'State', 'Threat Severity', 'Threat Signature', 'Source Type',
+                'User Agent', 'Endpoint', 'First Seen', 'Last Seen'
+            ])
+            for c in report.get('connections', []):
+                writer.writerow([
+                    c.get('remote_ip', ''),
+                    c.get('remote_port', ''),
+                    c.get('country', ''),
+                    c.get('country_code', ''),
+                    c.get('region', ''),
+                    c.get('city', ''),
+                    c.get('asn', ''),
+                    c.get('org', ''),
+                    c.get('isp', ''),
+                    c.get('local_port', ''),
+                    c.get('service', ''),
+                    c.get('proto', ''),
+                    c.get('process', ''),
+                    c.get('bytes_received', 0),
+                    c.get('bytes_sent', 0),
+                    c.get('hit_count', 1),
+                    c.get('state', ''),
+                    c.get('threat_severity', ''),
+                    c.get('threat_signature', ''),
+                    c.get('source_type', ''),
+                    c.get('user_agent', ''),
+                    c.get('endpoint', ''),
+                    c.get('iso_time', ''),
+                    time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(c.get('last_seen', time.time())))
+                ])
+            csv_payload = out.getvalue().encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/csv; charset=utf-8')
+            self.send_header('Content-Disposition', 'attachment; filename="inbound_connections_report.csv"')
+            self.send_header('Content-Length', str(len(csv_payload)))
+            self.end_headers()
+            self.wfile.write(csv_payload)
+            return
+
         # Static file mapping: serve directly with 200 OK and strict no-cache headers
         # to ensure the browser never receives a stale 304 Not Modified response.
         STATIC_FILE_MAP = {
@@ -218,6 +415,7 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        self._track_inbound_request()
         parsed = urllib.parse.urlparse(self.path)
 
         if parsed.path == '/api/threats/update':
@@ -284,6 +482,17 @@ class NetworkMonitorHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     })
             except Exception as e:
                 self.send_json_response({'status': 'error', 'message': str(e)}, status_code=500)
+            return
+
+        elif parsed.path == '/api/inbound-connections/clear':
+            with db.lock:
+                conn = db._get_connection()
+                try:
+                    with conn:
+                        conn.execute("DELETE FROM inbound_connections")
+                finally:
+                    conn.close()
+            self.send_json_response({'status': 'cleared', 'message': 'Inbound connections table cleared'})
             return
 
         self.send_response(404)
@@ -456,11 +665,18 @@ def main():
                 print(f"    python3 serve.py 8081\n")
                 sys.exit(1)
 
+    # Ensure Cloudflare tunnel is running and bound to our port
+    ensure_cloudflare_tunnel(port)
+
     try:
         with httpd:
-            print(f"[serve.py] Serving Network Monitor with Live Telemetry API on http://0.0.0.0:{port} ...")
-            print(f"[serve.py] Open dashboard in browser: {url}")
-            print(f"[serve.py] Telemetry API: http://localhost:{port}/api/network-telemetry")
+            print("=" * 72)
+            print(f"[serve.py] Network Monitor NOC Dashboard Online")
+            print(f"[serve.py] Local Origin:       http://localhost:{port}/index.html")
+            print(f"[serve.py] Cloudflare Gateway: {DEFAULT_CLOUDFLARE_URL}")
+            print(f"[serve.py] Telemetry API:      http://localhost:{port}/api/network-telemetry")
+            print(f"[serve.py] Gateway Info API:   http://localhost:{port}/api/gateway-info")
+            print("=" * 72)
             print("Press Ctrl+C to stop the server.")
             httpd.serve_forever()
     except KeyboardInterrupt:

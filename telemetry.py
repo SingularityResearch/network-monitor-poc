@@ -31,6 +31,11 @@ try:
 except Exception:
     threat_engine = None
 
+try:
+    from database import db
+except Exception:
+    db = None
+
 # Linux socket constants for raw packet capturing
 SOL_PACKET = 263
 PACKET_ADD_MEMBERSHIP = 1
@@ -1062,6 +1067,8 @@ class RealNetworkCollector:
                 'geo': geo,
                 'country': geo.get('country', ''),
                 'countryCode': geo.get('countryCode', ''),
+                'region': geo.get('region', ''),
+                'state': geo.get('region', ''),
                 'city': geo.get('city', ''),
                 'asn': geo.get('asn', ''),
                 'flag': geo.get('flag', '🌐')
@@ -1248,6 +1255,70 @@ class RealNetworkCollector:
         # Extract Relational Graph Clusters (Internal Mesh, Shared Domains/URLs, Common Protocols)
         relationships = self.extract_relationships(nodes, connections)
 
+        # Identify and record active inbound socket connections to local listening services
+        listening_ports = {s['local_port'] for s in raw_sockets if s.get('state') == 'LISTEN'}
+        listening_ports.add(8080)
+
+        inbound_count = 0
+        if db:
+            for s in active_entries:
+                is_inbound = False
+                rem_ip = ''
+                rem_port = 0
+                loc_ip = ''
+                loc_port = 0
+                src_type = 'socket'
+
+                if s['local_port'] in listening_ports and s['peer_ip'] not in ('*', '0.0.0.0', '::', ''):
+                    is_inbound = True
+                    rem_ip = s['peer_ip']
+                    rem_port = s['peer_port']
+                    loc_ip = s['local_ip']
+                    loc_port = s['local_port']
+                    src_type = 'socket'
+                elif s['peer_ip'] in (routes['local_ip'], '127.0.0.1') and s['local_ip'] not in (routes['local_ip'], '127.0.0.1'):
+                    is_inbound = True
+                    rem_ip = s['local_ip']
+                    rem_port = s['local_port']
+                    loc_ip = s['peer_ip']
+                    loc_port = s['peer_port']
+                    src_type = 'raw_sniffer'
+
+                if is_inbound and rem_ip:
+                    inbound_count += 1
+                    is_int = rem_ip.startswith(('10.', '192.168.', '172.16.', '172.17.', '172.18.', '172.19.',
+                                                '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
+                                                '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+                                                '127.', '::1'))
+                    r_geo = self.resolve_geoip(rem_ip, is_internal=is_int)
+                    m = s.get('metrics', {})
+                    port_cfg = get_service_for_port(loc_port, s['proto'])
+
+                    t_info = threat_by_ip.get(rem_ip, {})
+                    db.record_inbound_connection({
+                        'remote_ip': rem_ip,
+                        'remote_port': rem_port,
+                        'local_ip': loc_ip,
+                        'local_port': loc_port,
+                        'proto': s['proto'],
+                        'service': port_cfg['service'],
+                        'state': s.get('state', 'ESTAB'),
+                        'country': r_geo.get('country', 'Unknown'),
+                        'country_code': r_geo.get('countryCode', ''),
+                        'region': r_geo.get('region', ''),
+                        'city': r_geo.get('city', 'Unknown'),
+                        'asn': r_geo.get('asn', ''),
+                        'org': r_geo.get('org', ''),
+                        'isp': r_geo.get('isp', ''),
+                        'flag': r_geo.get('flag', '🌐'),
+                        'process': s.get('process', ''),
+                        'bytes_received': m.get('bytes_received', 512),
+                        'bytes_sent': m.get('bytes_sent', 256),
+                        'threat_severity': t_info.get('severity', ''),
+                        'threat_signature': t_info.get('signature', ''),
+                        'source_type': src_type
+                    })
+
         return {
             'nodes': nodes,
             'connections': connections,
@@ -1256,7 +1327,6 @@ class RealNetworkCollector:
             'sockets': detailed_sockets,
             'subnetGateways': ZONE_CENTERS,
             'meta': {
-
                 'source': 'real',
                 'scope': scope,
                 'resolveDns': resolve_dns,
@@ -1271,6 +1341,7 @@ class RealNetworkCollector:
                 'publicNodesCount': public_nodes_count,
                 'internalSocketsCount': internal_sockets_count,
                 'publicSocketsCount': public_sockets_count,
+                'inboundConnectionsCount': inbound_count,
                 'activeProcesses': active_processes,
                 'pcap': {
                     'enabled': True,
@@ -1485,6 +1556,71 @@ class RealNetworkCollector:
                 'topDestination': shared_destinations[0]['groupKey'] if shared_destinations else None
             }
         }
+
+    def record_inbound_http(self, client_ip: str, client_port: int = 0,
+                            local_port: int = 8080, country_code: str = None,
+                            region: str = None, city: str = None,
+                            user_agent: str = '', path: str = '',
+                            bytes_sent: int = 0, bytes_recv: int = 0,
+                            is_cf: bool = False):
+        """Record an inbound HTTP/API visitor arriving via Cloudflare or direct connection."""
+        if not client_ip or client_ip in ('0.0.0.0', '*'):
+            return
+        if not db:
+            return
+
+        is_internal = client_ip.startswith(('10.', '192.168.', '172.16.', '172.17.', '172.18.', '172.19.',
+                                            '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
+                                            '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+                                            '127.', '::1'))
+        geo = self.resolve_geoip(client_ip, is_internal=is_internal)
+
+        country = geo.get('country', 'Unknown')
+        if country_code and country_code not in ('PUB', 'LAN', ''):
+            c_flag = get_country_flag(country_code)
+            c_code = country_code
+        else:
+            c_flag = geo.get('flag', '🌐')
+            c_code = geo.get('countryCode', '')
+
+        reg = region or geo.get('region', '')
+        c_city = city or geo.get('city', 'Unknown')
+
+        threat_sev = ''
+        threat_sig = ''
+        if threat_engine:
+            t_sum = threat_engine.get_threats_summary()
+            for t in t_sum.get('threats', []):
+                if t.get('srcIp') == client_ip:
+                    threat_sev = t.get('severity', '')
+                    threat_sig = t.get('signature', '')
+                    break
+
+        db.record_inbound_connection({
+            'remote_ip': client_ip,
+            'remote_port': client_port,
+            'local_ip': self.get_system_routes().get('local_ip', '127.0.0.1'),
+            'local_port': local_port,
+            'proto': 'HTTP',
+            'service': 'HTTP (Dashboard)',
+            'state': 'ESTABLISHED',
+            'country': country,
+            'country_code': c_code,
+            'region': reg,
+            'city': c_city,
+            'asn': geo.get('asn', ''),
+            'org': geo.get('org', ''),
+            'isp': geo.get('isp', ''),
+            'flag': c_flag,
+            'process': 'python3 (serve.py)',
+            'bytes_received': bytes_recv or 512,
+            'bytes_sent': bytes_sent or 1024,
+            'threat_severity': threat_sev,
+            'threat_signature': threat_sig,
+            'user_agent': user_agent,
+            'endpoint': path,
+            'source_type': 'cloudflare' if is_cf else 'http'
+        })
 
 
 if __name__ == '__main__':

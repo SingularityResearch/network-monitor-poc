@@ -456,12 +456,15 @@ The backend exposes a JSON REST API for frontend streaming, automation, and thre
 
 ## Running Locally
 
-### 1. Start the Visualizer Server
-Run [serve.py](file:///home/shivachrome/source/repos/network-monitor/serve.py):
+### 1. Start the Visualizer Server & Cloudflare Gateway
+Run the unified startup script [start.sh](file:///home/shivachrome/source/repos/network-monitor/start.sh) or [serve.py](file:///home/shivachrome/source/repos/network-monitor/serve.py):
 ```bash
+./start.sh
+# or directly:
 python3 serve.py 8080
 ```
-Then open **[http://localhost:8080](http://localhost:8080)** in your browser.
+- **Local Dashboard**: [http://localhost:8080](http://localhost:8080)
+- **Public Cloudflare Gateway**: [https://enlarge-disciplines-executive-watches.trycloudflare.com/](https://enlarge-disciplines-executive-watches.trycloudflare.com/)
 
 *(Optional: Run with `sudo` or grant `CAP_NET_RAW` to enable the pure-Python raw packet sniffer)*:
 ```bash

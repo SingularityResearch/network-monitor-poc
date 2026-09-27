@@ -11,7 +11,17 @@ import time
 import json
 import sqlite3
 import threading
+import urllib.request
 from typing import Dict, Any, List, Optional
+
+def get_country_flag(country_code: str) -> str:
+    """Convert 2-letter ISO country code to emoji flag."""
+    if not country_code or len(country_code) != 2:
+        return '🌐'
+    try:
+        return ''.join(chr(127397 + ord(c.upper())) for c in country_code)
+    except Exception:
+        return '🌐'
 
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'network_history.db')
 RETENTION_HOURS = 48
@@ -97,6 +107,74 @@ class NetworkHistoryDB:
                         CREATE INDEX IF NOT EXISTS idx_threats_severity 
                         ON threat_events(severity);
                     """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS inbound_connections (
+                            id TEXT PRIMARY KEY,
+                            timestamp REAL NOT NULL,
+                            iso_time TEXT NOT NULL,
+                            time_str TEXT NOT NULL,
+                            remote_ip TEXT NOT NULL,
+                            remote_port INTEGER,
+                            local_ip TEXT NOT NULL,
+                            local_port INTEGER,
+                            proto TEXT NOT NULL,
+                            service TEXT,
+                            state TEXT,
+                            country TEXT,
+                            country_code TEXT,
+                            region TEXT,
+                            city TEXT,
+                            asn TEXT,
+                            org TEXT,
+                            isp TEXT,
+                            flag TEXT,
+                            process TEXT,
+                            bytes_received INTEGER DEFAULT 0,
+                            bytes_sent INTEGER DEFAULT 0,
+                            hit_count INTEGER DEFAULT 1,
+                            first_seen REAL NOT NULL,
+                            last_seen REAL NOT NULL,
+                            threat_severity TEXT,
+                            threat_signature TEXT,
+                            user_agent TEXT,
+                            endpoint TEXT,
+                            source_type TEXT
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inbound_last_seen 
+                        ON inbound_connections(last_seen DESC);
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inbound_remote_ip 
+                        ON inbound_connections(remote_ip);
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inbound_country 
+                        ON inbound_connections(country);
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inbound_region 
+                        ON inbound_connections(region);
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inbound_local_port 
+                        ON inbound_connections(local_port);
+                    """)
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inbound_threat_severity 
+                        ON inbound_connections(threat_severity);
+                    """)
+
+                    # Backfill from historical threat events and snapshots if empty
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) as cnt FROM inbound_connections")
+                        row = cursor.fetchone()
+                        if row and row['cnt'] == 0:
+                            self._backfill_inbound_connections(conn)
+                    except Exception as err:
+                        print(f"[database.py] Notice during inbound backfill check: {err}")
             finally:
                 conn.close()
 
@@ -438,6 +516,427 @@ class NetworkHistoryDB:
             finally:
                 conn.close()
 
+    def _backfill_inbound_connections(self, conn: sqlite3.Connection):
+        """Seed initial inbound_connections records from historical threat_events."""
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT src_ip, src_port, dest_ip, dest_port, proto, process, severity, signature, timestamp, iso_time, time_str, hit_count
+                FROM threat_events
+                ORDER BY timestamp DESC
+                LIMIT 500
+            """)
+            threat_rows = cursor.fetchall()
+            if not threat_rows:
+                return
+
+            unique_public_ips = set()
+            for r in threat_rows:
+                s_ip = r['src_ip']
+                if s_ip and not s_ip.startswith(('10.', '192.168.', '172.16.', '172.17.', '172.18.', '172.19.',
+                                                 '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
+                                                 '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+                                                 '127.', '0.', '169.254.')):
+                    unique_public_ips.add(s_ip)
+
+            geo_map = {}
+            pub_list = list(unique_public_ips)[:80]
+            if pub_list:
+                try:
+                    url = 'http://ip-api.com/batch?fields=status,country,countryCode,regionName,city,isp,org,as,query'
+                    req_data = json.dumps([{'query': ip} for ip in pub_list]).encode('utf-8')
+                    req = urllib.request.Request(url, data=req_data, headers={'Content-Type': 'application/json', 'User-Agent': 'NetworkMonitor/2.0'})
+                    with urllib.request.urlopen(req, timeout=3.0) as resp:
+                        data = json.loads(resp.read().decode('utf-8'))
+                        for item in data:
+                            q_ip = item.get('query')
+                            if q_ip and item.get('status') == 'success':
+                                cc = item.get('countryCode', '')
+                                as_val = item.get('as', '')
+                                asn_short = as_val.split()[0] if as_val.startswith('AS') else as_val
+                                geo_map[q_ip] = {
+                                    'country': item.get('country', 'Unknown'),
+                                    'country_code': cc,
+                                    'region': item.get('regionName', ''),
+                                    'city': item.get('city', 'Unknown'),
+                                    'isp': item.get('isp', 'Unknown ISP'),
+                                    'org': item.get('org', item.get('isp', 'Public Host')),
+                                    'asn': asn_short or 'Unknown',
+                                    'flag': get_country_flag(cc)
+                                }
+                except Exception:
+                    pass
+
+            for r in threat_rows:
+                s_ip = r['src_ip']
+                d_port = r['dest_port'] or 8080
+                proto = (r['proto'] or 'TCP').upper()
+                conn_id = f"{s_ip}:{d_port}:{proto}"
+                ts = r['timestamp'] or time.time()
+                iso_time = r['iso_time'] or time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
+                time_str = r['time_str'] or time.strftime('%H:%M:%S', time.localtime(ts))
+
+                if s_ip.startswith(('10.', '192.168.', '172.16.', '172.17.', '172.18.', '172.19.',
+                                    '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
+                                    '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+                                    '127.', '0.')):
+                    country = 'Internal'
+                    country_code = 'LAN'
+                    region = 'Internal LAN'
+                    city = 'Local Subnet'
+                    flag = '🏠'
+                    asn = 'RFC1918'
+                    org = 'Private Network'
+                    isp = 'Private Network'
+                else:
+                    g = geo_map.get(s_ip, {})
+                    country = g.get('country', 'Public')
+                    country_code = g.get('country_code', 'PUB')
+                    region = g.get('region', '')
+                    city = g.get('city', 'Unknown')
+                    flag = g.get('flag', '🌐')
+                    asn = g.get('asn', 'Public')
+                    org = g.get('org', 'Public Host')
+                    isp = g.get('isp', 'Public Internet')
+
+                service = 'HTTP' if d_port == 8080 else 'SSH' if d_port == 22 else 'DNS' if d_port == 53 else f"Port {d_port}"
+
+                cursor.execute("""
+                    INSERT OR IGNORE INTO inbound_connections (
+                        id, timestamp, iso_time, time_str,
+                        remote_ip, remote_port, local_ip, local_port, proto, service,
+                        state, country, country_code, region, city,
+                        asn, org, isp, flag, process,
+                        bytes_received, bytes_sent, hit_count, first_seen, last_seen,
+                        threat_severity, threat_signature, user_agent, endpoint, source_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    conn_id, ts, iso_time, time_str,
+                    s_ip, r['src_port'] or 0, r['dest_ip'] or '127.0.0.1', d_port, proto, service,
+                    'CLOSED', country, country_code, region, city,
+                    asn, org, isp, flag, r['process'] or 'Exploit Engine',
+                    1024, 256, r['hit_count'] or 1, ts, ts,
+                    r['severity'], r['signature'], '', '', 'threat_engine'
+                ))
+            print(f"[database.py] Successfully backfilled inbound_connections from threat_events.")
+        except Exception as e:
+            print(f"[database.py] Error during inbound backfill: {e}")
+
+    def record_inbound_connection(self, conn_data: Dict[str, Any]) -> str:
+        """
+        Record or update an inbound connection flow in SQLite.
+        Upserts on (remote_ip, local_port, proto).
+        """
+        remote_ip = str(conn_data.get('remote_ip') or conn_data.get('remoteIp') or '')
+        local_port = int(conn_data.get('local_port') or conn_data.get('localPort') or 0)
+        proto = str(conn_data.get('proto') or 'TCP').upper()
+        if not remote_ip or not local_port:
+            return ""
+
+        conn_id = f"{remote_ip}:{local_port}:{proto}"
+        now = time.time()
+        iso_time = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
+        time_str = time.strftime('%H:%M:%S', time.localtime(now))
+
+        remote_port = int(conn_data.get('remote_port') or conn_data.get('remotePort') or 0)
+        local_ip = str(conn_data.get('local_ip') or conn_data.get('localIP') or '127.0.0.1')
+        service = str(conn_data.get('service') or '')
+        state = str(conn_data.get('state') or 'ESTAB')
+        country = str(conn_data.get('country') or 'Unknown')
+        country_code = str(conn_data.get('country_code') or conn_data.get('countryCode') or '')
+        region = str(conn_data.get('region') or conn_data.get('state') or '')
+        city = str(conn_data.get('city') or 'Unknown')
+        asn = str(conn_data.get('asn') or '')
+        org = str(conn_data.get('org') or '')
+        isp = str(conn_data.get('isp') or '')
+        flag = str(conn_data.get('flag') or (get_country_flag(country_code) if country_code else '🌐'))
+        process = str(conn_data.get('process') or '')
+        bytes_recv = int(conn_data.get('bytes_received') or conn_data.get('bytesRecv') or 0)
+        bytes_sent = int(conn_data.get('bytes_sent') or conn_data.get('bytesSent') or 0)
+        threat_severity = str(conn_data.get('threat_severity') or conn_data.get('threatSeverity') or '')
+        threat_signature = str(conn_data.get('threat_signature') or conn_data.get('threatSignature') or '')
+        user_agent = str(conn_data.get('user_agent') or conn_data.get('userAgent') or '')
+        endpoint = str(conn_data.get('endpoint') or '')
+        source_type = str(conn_data.get('source_type') or conn_data.get('sourceType') or 'socket')
+
+        with self.lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT id, hit_count, bytes_received, bytes_sent, first_seen,
+                               threat_severity, threat_signature, country, region, city, flag
+                        FROM inbound_connections WHERE id = ?
+                    """, (conn_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        old_hits = row['hit_count'] or 1
+                        old_recv = row['bytes_received'] or 0
+                        old_sent = row['bytes_sent'] or 0
+                        old_sev = row['threat_severity'] or ''
+                        old_sig = row['threat_signature'] or ''
+                        old_country = row['country'] or ''
+                        old_region = row['region'] or ''
+                        old_city = row['city'] or ''
+                        old_flag = row['flag'] or '🌐'
+
+                        fin_sev = threat_severity or old_sev
+                        fin_sig = threat_signature or old_sig
+                        fin_country = country if country != 'Unknown' else (old_country or country)
+                        fin_region = region if region else old_region
+                        fin_city = city if city != 'Unknown' else (old_city or city)
+                        fin_flag = flag if flag != '🌐' else (old_flag or flag)
+
+                        cursor.execute("""
+                            UPDATE inbound_connections SET
+                                remote_port = ?,
+                                local_ip = ?,
+                                service = COALESCE(NULLIF(?, ''), service),
+                                state = ?,
+                                country = ?,
+                                country_code = COALESCE(NULLIF(?, ''), country_code),
+                                region = ?,
+                                city = ?,
+                                asn = COALESCE(NULLIF(?, ''), asn),
+                                org = COALESCE(NULLIF(?, ''), org),
+                                isp = COALESCE(NULLIF(?, ''), isp),
+                                flag = ?,
+                                process = COALESCE(NULLIF(?, ''), process),
+                                bytes_received = ?,
+                                bytes_sent = ?,
+                                hit_count = ?,
+                                last_seen = ?,
+                                threat_severity = ?,
+                                threat_signature = ?,
+                                user_agent = COALESCE(NULLIF(?, ''), user_agent),
+                                endpoint = COALESCE(NULLIF(?, ''), endpoint),
+                                source_type = ?
+                            WHERE id = ?
+                        """, (
+                            remote_port, local_ip, service, state,
+                            fin_country, country_code, fin_region, fin_city,
+                            asn, org, isp, fin_flag, process,
+                            old_recv + bytes_recv, old_sent + bytes_sent,
+                            old_hits + 1, now, fin_sev, fin_sig,
+                            user_agent, endpoint, source_type, conn_id
+                        ))
+                    else:
+                        cursor.execute("""
+                            INSERT INTO inbound_connections (
+                                id, timestamp, iso_time, time_str,
+                                remote_ip, remote_port, local_ip, local_port, proto, service,
+                                state, country, country_code, region, city,
+                                asn, org, isp, flag, process,
+                                bytes_received, bytes_sent, hit_count, first_seen, last_seen,
+                                threat_severity, threat_signature, user_agent, endpoint, source_type
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            conn_id, now, iso_time, time_str,
+                            remote_ip, remote_port, local_ip, local_port, proto, service,
+                            state, country, country_code, region, city,
+                            asn, org, isp, flag, process,
+                            bytes_recv, bytes_sent, 1, now, now,
+                            threat_severity, threat_signature, user_agent, endpoint, source_type
+                        ))
+
+                    # 48-hour rolling retention pruning
+                    cutoff = now - self.retention_seconds
+                    cursor.execute("DELETE FROM inbound_connections WHERE last_seen < ?", (cutoff,))
+                return conn_id
+            finally:
+                conn.close()
+
+    def get_inbound_report(self, since: Optional[float] = None, limit: int = 500,
+                           search: Optional[str] = None, country: Optional[str] = None,
+                           region: Optional[str] = None, ip: Optional[str] = None,
+                           port: Optional[int] = None, proto: Optional[str] = None,
+                           threat_only: bool = False, source_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Query inbound connections with multi-faceted filtering (Country, State/Region, IP, Port, etc.)
+        and generate summary aggregation metrics.
+        """
+        now = time.time()
+        earliest_allowed = now - self.retention_seconds
+
+        if since is not None:
+            if since < 1_000_000:
+                min_time = max(earliest_allowed, now - since)
+            else:
+                min_time = max(earliest_allowed, since)
+        else:
+            min_time = earliest_allowed
+
+        where_clauses = ["last_seen >= ?"]
+        params: List[Any] = [min_time]
+
+        if country and country.strip().lower() not in ('all', ''):
+            where_clauses.append("LOWER(country) = LOWER(?)")
+            params.append(country.strip())
+
+        if region and region.strip().lower() not in ('all', ''):
+            where_clauses.append("LOWER(region) = LOWER(?)")
+            params.append(region.strip())
+
+        if ip and ip.strip():
+            where_clauses.append("remote_ip LIKE ?")
+            params.append(f"%{ip.strip()}%")
+
+        if port and port > 0:
+            where_clauses.append("local_port = ?")
+            params.append(int(port))
+
+        if proto and proto.strip().lower() not in ('all', ''):
+            where_clauses.append("LOWER(proto) = LOWER(?)")
+            params.append(proto.strip())
+
+        if threat_only:
+            where_clauses.append("threat_severity IS NOT NULL AND threat_severity != ''")
+
+        if source_type and source_type.strip().lower() not in ('all', ''):
+            where_clauses.append("LOWER(source_type) = LOWER(?)")
+            params.append(source_type.strip())
+
+        if search and search.strip():
+            term = f"%{search.strip().lower()}%"
+            where_clauses.append("""(
+                LOWER(remote_ip) LIKE ? OR
+                LOWER(country) LIKE ? OR
+                LOWER(region) LIKE ? OR
+                LOWER(city) LIKE ? OR
+                LOWER(org) LIKE ? OR
+                LOWER(isp) LIKE ? OR
+                LOWER(asn) LIKE ? OR
+                LOWER(service) LIKE ? OR
+                CAST(local_port AS TEXT) LIKE ? OR
+                LOWER(process) LIKE ? OR
+                LOWER(threat_signature) LIKE ? OR
+                LOWER(threat_severity) LIKE ?
+            )""")
+            params.extend([term] * 12)
+
+        where_sql = " AND ".join(where_clauses)
+
+        with self.lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+
+                query = f"""
+                    SELECT * FROM inbound_connections
+                    WHERE {where_sql}
+                    ORDER BY last_seen DESC
+                    LIMIT ?
+                """
+                query_params = list(params)
+                query_params.append(min(1000, max(1, limit)))
+                cursor.execute(query, query_params)
+                rows = cursor.fetchall()
+
+                connections = []
+                unique_ips = set()
+                total_bytes = 0
+                threat_count = 0
+                countries_count: Dict[str, Dict[str, Any]] = {}
+                states_count: Dict[str, Dict[str, Any]] = {}
+                ports_count: Dict[int, Dict[str, Any]] = {}
+                sources_count: Dict[str, int] = {}
+
+                for r in rows:
+                    rec = dict(r)
+                    r_ip = rec['remote_ip']
+                    unique_ips.add(r_ip)
+                    b_recv = rec['bytes_received'] or 0
+                    b_sent = rec['bytes_sent'] or 0
+                    rec_bytes = b_recv + b_sent
+                    total_bytes += rec_bytes
+                    if rec['threat_severity']:
+                        threat_count += 1
+
+                    c_name = rec['country'] or 'Unknown'
+                    c_code = rec['country_code'] or ''
+                    c_flag = rec['flag'] or (get_country_flag(c_code) if c_code else '🌐')
+                    if c_name not in countries_count:
+                        countries_count[c_name] = {'country': c_name, 'countryCode': c_code, 'flag': c_flag, 'count': 0, 'bytes': 0}
+                    countries_count[c_name]['count'] += rec['hit_count'] or 1
+                    countries_count[c_name]['bytes'] += rec_bytes
+
+                    r_name = rec['region'] or ''
+                    if r_name:
+                        state_key = f"{r_name}, {c_code or c_name}"
+                        if state_key not in states_count:
+                            states_count[state_key] = {'state': r_name, 'country': c_name, 'countryCode': c_code, 'flag': c_flag, 'count': 0, 'bytes': 0}
+                        states_count[state_key]['count'] += rec['hit_count'] or 1
+                        states_count[state_key]['bytes'] += rec_bytes
+
+                    l_port = rec['local_port'] or 0
+                    if l_port not in ports_count:
+                        ports_count[l_port] = {'port': l_port, 'service': rec['service'] or f"Port {l_port}", 'proto': rec['proto'], 'count': 0}
+                    ports_count[l_port]['count'] += rec['hit_count'] or 1
+
+                    s_type = rec['source_type'] or 'socket'
+                    sources_count[s_type] = sources_count.get(s_type, 0) + 1
+
+                    connections.append(rec)
+
+                # Available options for dropdowns across all records in time window
+                cursor.execute("""
+                    SELECT DISTINCT country, country_code, flag 
+                    FROM inbound_connections 
+                    WHERE last_seen >= ? AND country IS NOT NULL AND country != '' 
+                    ORDER BY country ASC
+                """, (min_time,))
+                avail_countries = [{'country': row['country'], 'countryCode': row['country_code'], 'flag': row['flag']} for row in cursor.fetchall()]
+
+                cursor.execute("""
+                    SELECT DISTINCT region, country, country_code 
+                    FROM inbound_connections 
+                    WHERE last_seen >= ? AND region IS NOT NULL AND region != '' 
+                    ORDER BY region ASC
+                """, (min_time,))
+                avail_states = [{'region': row['region'], 'country': row['country'], 'countryCode': row['country_code']} for row in cursor.fetchall()]
+
+                cursor.execute("""
+                    SELECT DISTINCT local_port, service, proto 
+                    FROM inbound_connections 
+                    WHERE last_seen >= ? AND local_port > 0 
+                    ORDER BY local_port ASC
+                """, (min_time,))
+                avail_ports = [{'port': row['local_port'], 'service': row['service'], 'proto': row['proto']} for row in cursor.fetchall()]
+
+                total_hits = sum(c['hit_count'] for c in connections) or len(connections) or 1
+                top_countries = sorted(countries_count.values(), key=lambda x: x['count'], reverse=True)[:15]
+                for tc in top_countries:
+                    tc['pct'] = round((tc['count'] / total_hits) * 100, 1)
+
+                top_states = sorted(states_count.values(), key=lambda x: x['count'], reverse=True)[:15]
+                for ts in top_states:
+                    ts['pct'] = round((ts['count'] / total_hits) * 100, 1)
+
+                top_ports = sorted(ports_count.values(), key=lambda x: x['count'], reverse=True)[:10]
+
+                return {
+                    'summary': {
+                        'totalConnections': len(connections),
+                        'totalHits': total_hits,
+                        'uniqueRemoteIps': len(unique_ips),
+                        'totalBytes': total_bytes,
+                        'threatCount': threat_count,
+                        'topCountry': top_countries[0] if top_countries else None,
+                        'topState': top_states[0] if top_states else None,
+                        'sources': sources_count
+                    },
+                    'topCountries': top_countries,
+                    'topStates': top_states,
+                    'topPorts': top_ports,
+                    'availableCountries': avail_countries,
+                    'availableStates': avail_states,
+                    'availablePorts': avail_ports,
+                    'connections': connections
+                }
+            finally:
+                conn.close()
+
     def purge_expired(self) -> int:
         """Manually trigger purging of records older than 48 hours."""
         now = time.time()
@@ -450,6 +949,9 @@ class NetworkHistoryDB:
                     cursor.execute("DELETE FROM snapshots WHERE timestamp < ?", (cutoff,))
                     purged = cursor.rowcount
                     cursor.execute("DELETE FROM threat_events WHERE timestamp < ?", (cutoff,))
+                    purged += cursor.rowcount
+                    cursor.execute("DELETE FROM inbound_connections WHERE last_seen < ?", (cutoff,))
+                    purged += cursor.rowcount
                     if purged > 0:
                         self.total_purged += purged
                     return purged

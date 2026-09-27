@@ -194,6 +194,59 @@ class NetworkClusterApp {
     this.currentThreatTab = 'all';
     this.threatSearchQuery = '';
 
+    // Inbound Connections & Origin Report Controls
+    this.btnOpenInboundReport = document.getElementById('btnOpenInboundReport');
+    this.headerInboundCount = document.getElementById('headerInboundCount');
+    this.btnSidebarInbound = document.getElementById('btnSidebarInbound');
+    this.sidebarInboundCount = document.getElementById('sidebarInboundCount');
+    this.inboundDrawer = document.getElementById('inboundDrawer');
+    this.inboundDrawerBackdrop = document.getElementById('inboundDrawerBackdrop');
+    this.btnCloseInboundDrawer = document.getElementById('btnCloseInboundDrawer');
+    this.btnRefreshInbound = document.getElementById('btnRefreshInbound');
+    this.btnExportInboundCsv = document.getElementById('btnExportInboundCsv');
+    this.inboundKpiTotal = document.getElementById('inboundKpiTotal');
+    this.inboundKpiHits = document.getElementById('inboundKpiHits');
+    this.inboundKpiUniqueIps = document.getElementById('inboundKpiUniqueIps');
+    this.inboundKpiSources = document.getElementById('inboundKpiSources');
+    this.inboundKpiTopCountry = document.getElementById('inboundKpiTopCountry');
+    this.inboundKpiCountryHits = document.getElementById('inboundKpiCountryHits');
+    this.inboundKpiTopRegion = document.getElementById('inboundKpiTopRegion');
+    this.inboundKpiRegionHits = document.getElementById('inboundKpiRegionHits');
+    this.inboundKpiThreats = document.getElementById('inboundKpiThreats');
+    this.inboundKpiThreatPct = document.getElementById('inboundKpiThreatPct');
+    this.inboundKpiBytes = document.getElementById('inboundKpiBytes');
+    this.inboundKpiBytesSub = document.getElementById('inboundKpiBytesSub');
+    this.inboundCountryChips = document.getElementById('inboundCountryChips');
+    this.inboundStateChips = document.getElementById('inboundStateChips');
+    this.inboundSearchInput = document.getElementById('inboundSearchInput');
+    this.btnInboundSearchClear = document.getElementById('btnInboundSearchClear');
+    this.inboundCountrySelect = document.getElementById('inboundCountrySelect');
+    this.inboundRegionSelect = document.getElementById('inboundRegionSelect');
+    this.inboundPortSelect = document.getElementById('inboundPortSelect');
+    this.inboundThreatSelect = document.getElementById('inboundThreatSelect');
+    this.inboundSourceSelect = document.getElementById('inboundSourceSelect');
+    this.inboundTimeSelect = document.getElementById('inboundTimeSelect');
+    this.btnResetInboundFilters = document.getElementById('btnResetInboundFilters');
+    this.btnInboundEmptyReset = document.getElementById('btnInboundEmptyReset');
+    this.inboundResultsCount = document.getElementById('inboundResultsCount');
+    this.inboundActiveFilterTag = document.getElementById('inboundActiveFilterTag');
+    this.inboundTableBody = document.getElementById('inboundTableBody');
+    this.inboundEmptyState = document.getElementById('inboundEmptyState');
+    this.inboundTableContainer = document.getElementById('inboundTableContainer');
+
+    this.inboundReportData = null;
+    this.inboundFilterState = {
+      search: '',
+      country: '',
+      region: '',
+      port: '',
+      threatFilter: 'all',
+      sourceType: '',
+      timeWindow: '172800'
+    };
+    this.inboundDebounceTimer = null;
+    this.lastInboundFetchTime = 0;
+
     // Historical Topology Timeline Controls
     this.timelineBar = document.getElementById('timelineBar');
     this.btnTimelineStepBack = document.getElementById('btnTimelineStepBack');
@@ -671,6 +724,89 @@ class NetworkClusterApp {
       });
     }
 
+    // Inbound Report Drawer triggers
+    if (this.btnOpenInboundReport) {
+      this.btnOpenInboundReport.addEventListener('click', () => this.openInboundDrawer());
+    }
+    this.btnSidebarInbound?.addEventListener('click', () => this.openInboundDrawer());
+    this.btnCloseInboundDrawer?.addEventListener('click', () => this.closeInboundDrawer());
+    this.inboundDrawerBackdrop?.addEventListener('click', () => this.closeInboundDrawer());
+    this.btnRefreshInbound?.addEventListener('click', () => this.fetchInboundReport());
+    this.btnExportInboundCsv?.addEventListener('click', () => this.exportInboundCsv());
+
+    // Inbound Search with debounce
+    if (this.inboundSearchInput) {
+      this.inboundSearchInput.addEventListener('input', (e) => {
+        clearTimeout(this.inboundDebounceTimer);
+        this.inboundDebounceTimer = setTimeout(() => {
+          this.inboundFilterState.search = e.target.value.trim();
+          this.fetchInboundReport();
+        }, 250);
+      });
+    }
+
+    if (this.btnInboundSearchClear) {
+      this.btnInboundSearchClear.addEventListener('click', () => {
+        if (this.inboundSearchInput) this.inboundSearchInput.value = '';
+        this.inboundFilterState.search = '';
+        this.fetchInboundReport();
+      });
+    }
+
+    // Inbound Dropdown Filters
+    this.inboundCountrySelect?.addEventListener('change', (e) => {
+      this.inboundFilterState.country = e.target.value;
+      this.fetchInboundReport();
+    });
+
+    this.inboundRegionSelect?.addEventListener('change', (e) => {
+      this.inboundFilterState.region = e.target.value;
+      this.fetchInboundReport();
+    });
+
+    this.inboundPortSelect?.addEventListener('change', (e) => {
+      this.inboundFilterState.port = e.target.value;
+      this.fetchInboundReport();
+    });
+
+    this.inboundThreatSelect?.addEventListener('change', (e) => {
+      this.inboundFilterState.threatFilter = e.target.value;
+      this.fetchInboundReport();
+    });
+
+    this.inboundSourceSelect?.addEventListener('change', (e) => {
+      this.inboundFilterState.sourceType = e.target.value;
+      this.fetchInboundReport();
+    });
+
+    this.inboundTimeSelect?.addEventListener('change', (e) => {
+      this.inboundFilterState.timeWindow = e.target.value;
+      this.fetchInboundReport();
+    });
+
+    const resetInboundFilters = () => {
+      this.inboundFilterState = {
+        search: '',
+        country: '',
+        region: '',
+        port: '',
+        threatFilter: 'all',
+        sourceType: '',
+        timeWindow: '172800'
+      };
+      if (this.inboundSearchInput) this.inboundSearchInput.value = '';
+      if (this.inboundCountrySelect) this.inboundCountrySelect.value = '';
+      if (this.inboundRegionSelect) this.inboundRegionSelect.value = '';
+      if (this.inboundPortSelect) this.inboundPortSelect.value = '';
+      if (this.inboundThreatSelect) this.inboundThreatSelect.value = 'all';
+      if (this.inboundSourceSelect) this.inboundSourceSelect.value = '';
+      if (this.inboundTimeSelect) this.inboundTimeSelect.value = '172800';
+      this.fetchInboundReport();
+    };
+
+    this.btnResetInboundFilters?.addEventListener('click', resetInboundFilters);
+    this.btnInboundEmptyReset?.addEventListener('click', resetInboundFilters);
+
     // Timeline Scrubber Controls
     this.btnTimelineStepBack?.addEventListener('click', () => this.stepTimeline(-1));
     this.btnTimelineStepFwd?.addEventListener('click', () => this.stepTimeline(1));
@@ -699,7 +835,9 @@ class NetworkClusterApp {
     // Global keyboard shortcuts (Escape to close open drawers, Spacebar to toggle stream)
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (this.threatDrawer?.classList.contains('open')) {
+        if (this.inboundDrawer?.classList.contains('open')) {
+          this.closeInboundDrawer();
+        } else if (this.threatDrawer?.classList.contains('open')) {
           this.closeThreatDrawer();
         } else if (this.relDrawer?.classList.contains('open')) {
           this.closeRelationshipsDrawer();
@@ -814,6 +952,9 @@ class NetworkClusterApp {
       } else if (this.threatDrawer?.classList.contains('open')) {
         this.fetchThreats();
       }
+      if (this.inboundDrawer?.classList.contains('open') && (!this.lastInboundFetchTime || now - this.lastInboundFetchTime >= 4000)) {
+        this.fetchInboundReport(false);
+      }
       if (!this.lastHistoryLogTime || now - this.lastHistoryLogTime >= 8000) {
         this.lastHistoryLogTime = now;
         this.addToHistory();
@@ -840,6 +981,11 @@ class NetworkClusterApp {
 
     if (this.pillPublicVal) {
       this.pillPublicVal.textContent = `${meta.publicNodesCount || 0} IPs (${meta.publicSocketsCount || 0} socks)`;
+    }
+
+    if (meta.inboundConnectionsCount !== undefined) {
+      if (this.headerInboundCount) this.headerInboundCount.textContent = meta.inboundConnectionsCount;
+      if (this.sidebarInboundCount) this.sidebarInboundCount.textContent = meta.inboundConnectionsCount;
     }
 
     if (this.telemetryStatusBadge) {
@@ -2544,6 +2690,444 @@ class NetworkClusterApp {
           this.scrubToHistory(next);
         }
       }, 1500);
+    }
+  }
+
+  // ==========================================================================
+  // Inbound Connections & Geo Location Report Engine
+  // ==========================================================================
+  async openInboundDrawer() {
+    if (this.inboundDrawer) this.inboundDrawer.classList.add('open');
+    if (this.inboundDrawerBackdrop) this.inboundDrawerBackdrop.classList.add('open');
+
+    // Close any other open drawers
+    if (this.threatDrawer?.classList.contains('open')) this.closeThreatDrawer();
+    if (this.relDrawer?.classList.contains('open')) this.closeRelationshipsDrawer();
+    if (this.inspectorDrawer?.classList.contains('open')) this.closeSocketInspector();
+    if (this.alertsDrawer?.classList.contains('open')) {
+      this.alertsDrawer?.classList.remove('open');
+      this.alertsBackdrop?.classList.remove('open');
+    }
+
+    await this.fetchInboundReport();
+  }
+
+  closeInboundDrawer() {
+    if (this.inboundDrawer) this.inboundDrawer.classList.remove('open');
+    if (this.inboundDrawerBackdrop) this.inboundDrawerBackdrop.classList.remove('open');
+  }
+
+  formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  formatRelativeTime(epochSec) {
+    if (!epochSec) return '--';
+    const diff = Math.max(0, Math.floor(Date.now() / 1000 - epochSec));
+    if (diff < 10) return 'Just now';
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  async fetchInboundReport(showLoading = true) {
+    this.lastInboundFetchTime = Date.now();
+    if (showLoading && this.btnRefreshInbound) {
+      this.btnRefreshInbound.classList.add('loading');
+      this.btnRefreshInbound.disabled = true;
+    }
+
+    try {
+      const params = new URLSearchParams();
+      if (this.inboundFilterState.timeWindow) params.set('since', this.inboundFilterState.timeWindow);
+      if (this.inboundFilterState.search) params.set('q', this.inboundFilterState.search);
+      if (this.inboundFilterState.country) params.set('country', this.inboundFilterState.country);
+      if (this.inboundFilterState.region) params.set('state', this.inboundFilterState.region);
+      if (this.inboundFilterState.port) params.set('port', this.inboundFilterState.port);
+      if (this.inboundFilterState.sourceType) params.set('source_type', this.inboundFilterState.sourceType);
+      if (this.inboundFilterState.threatFilter === 'threats') {
+        params.set('threat_only', '1');
+      }
+
+      const res = await fetch(`/api/inbound-report?${params.toString()}`);
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      const data = await res.json();
+      if (data.status === 'ok' && data.report) {
+        this.inboundReportData = data.report;
+        this.renderInboundReport(data.report);
+      }
+    } catch (err) {
+      console.error('[app.js] Failed to fetch inbound report:', err);
+    } finally {
+      if (showLoading && this.btnRefreshInbound) {
+        this.btnRefreshInbound.classList.remove('loading');
+        this.btnRefreshInbound.disabled = false;
+      }
+    }
+  }
+
+  exportInboundCsv() {
+    const params = new URLSearchParams();
+    if (this.inboundFilterState.timeWindow) params.set('since', this.inboundFilterState.timeWindow);
+    if (this.inboundFilterState.search) params.set('q', this.inboundFilterState.search);
+    if (this.inboundFilterState.country) params.set('country', this.inboundFilterState.country);
+    if (this.inboundFilterState.region) params.set('state', this.inboundFilterState.region);
+    if (this.inboundFilterState.port) params.set('port', this.inboundFilterState.port);
+    if (this.inboundFilterState.sourceType) params.set('source_type', this.inboundFilterState.sourceType);
+    if (this.inboundFilterState.threatFilter === 'threats') params.set('threat_only', '1');
+
+    window.location.href = `/api/inbound-connections/export?${params.toString()}`;
+    this.showToast('Export Initiated', 'Inbound connection report CSV is downloading.', 'success');
+  }
+
+  renderInboundReport(report) {
+    if (!report) return;
+
+    const summary = report.summary || {};
+    const totalConns = summary.totalConnections || 0;
+    const totalHits = summary.totalHits || totalConns || 0;
+    const uniqueIps = summary.uniqueRemoteIps || 0;
+    const totalBytes = summary.totalBytes || 0;
+    const threats = summary.threatCount || 0;
+
+    // Update KPI cards
+    if (this.inboundKpiTotal) this.inboundKpiTotal.textContent = totalConns.toLocaleString();
+    if (this.inboundKpiHits) this.inboundKpiHits.textContent = `${totalHits.toLocaleString()} total requests / hits`;
+    if (this.inboundKpiUniqueIps) this.inboundKpiUniqueIps.textContent = uniqueIps.toLocaleString();
+
+    const srcCounts = summary.sources || {};
+    const srcDesc = Object.entries(srcCounts).map(([k, v]) => `${k}:${v}`).join(', ') || 'Active Sockets';
+    if (this.inboundKpiSources) this.inboundKpiSources.textContent = srcDesc;
+
+    if (this.inboundKpiTopCountry) {
+      if (summary.topCountry) {
+        this.inboundKpiTopCountry.textContent = `${summary.topCountry.flag || '🌐'} ${summary.topCountry.country}`;
+        this.inboundKpiTopCountry.title = `${summary.topCountry.country} (${summary.topCountry.count} hits, ${summary.topCountry.pct}%)`;
+      } else {
+        this.inboundKpiTopCountry.textContent = '--';
+      }
+    }
+    if (this.inboundKpiCountryHits) {
+      this.inboundKpiCountryHits.textContent = summary.topCountry ? `${summary.topCountry.count} hits (${summary.topCountry.pct}%)` : '--';
+    }
+
+    if (this.inboundKpiTopRegion) {
+      if (summary.topState) {
+        this.inboundKpiTopRegion.textContent = `${summary.topState.flag || '📍'} ${summary.topState.state}`;
+        this.inboundKpiTopRegion.title = `${summary.topState.state}, ${summary.topState.country} (${summary.topState.count} hits, ${summary.topState.pct}%)`;
+      } else {
+        this.inboundKpiTopRegion.textContent = '--';
+      }
+    }
+    if (this.inboundKpiRegionHits) {
+      this.inboundKpiRegionHits.textContent = summary.topState ? `${summary.topState.count} hits (${summary.topState.pct}%)` : '--';
+    }
+
+    if (this.inboundKpiThreats) this.inboundKpiThreats.textContent = threats.toLocaleString();
+    if (this.inboundKpiThreatPct) {
+      const threatPct = totalConns > 0 ? ((threats / totalConns) * 100).toFixed(1) : 0;
+      this.inboundKpiThreatPct.textContent = `${threatPct}% of ingress`;
+    }
+
+    if (this.inboundKpiBytes) this.inboundKpiBytes.textContent = this.formatBytes(totalBytes);
+
+    // Update Header and Sidebar Badges
+    if (this.headerInboundCount) this.headerInboundCount.textContent = totalConns;
+    if (this.sidebarInboundCount) this.sidebarInboundCount.textContent = totalConns;
+
+    // Render Geographical Quick-Chips (Top Countries & States)
+    this.renderInboundChips(report.topCountries || [], report.topStates || []);
+
+    // Dynamically populate available countries / states / ports in dropdowns
+    this.updateInboundDropdowns(report);
+
+    // Render Active Filters Tag
+    const activeFilters = [];
+    if (this.inboundFilterState.search) activeFilters.push(`"${this.inboundFilterState.search}"`);
+    if (this.inboundFilterState.country) activeFilters.push(`Country: ${this.inboundFilterState.country}`);
+    if (this.inboundFilterState.region) activeFilters.push(`State: ${this.inboundFilterState.region}`);
+    if (this.inboundFilterState.port) activeFilters.push(`Port: ${this.inboundFilterState.port}`);
+    if (this.inboundFilterState.threatFilter === 'threats') activeFilters.push(`Threats Only`);
+    if (this.inboundFilterState.sourceType) activeFilters.push(`Source: ${this.inboundFilterState.sourceType}`);
+
+    if (this.inboundActiveFilterTag) {
+      if (activeFilters.length > 0) {
+        this.inboundActiveFilterTag.style.display = 'inline-block';
+        this.inboundActiveFilterTag.textContent = `Filtered by: ${activeFilters.join(' • ')}`;
+      } else {
+        this.inboundActiveFilterTag.style.display = 'none';
+      }
+    }
+
+    if (this.inboundResultsCount) {
+      this.inboundResultsCount.textContent = `Showing ${totalConns.toLocaleString()} matching inbound connection${totalConns === 1 ? '' : 's'}`;
+    }
+
+    // Render Table Rows
+    const conns = report.connections || [];
+    if (!this.inboundTableBody) return;
+
+    if (conns.length === 0) {
+      this.inboundTableBody.innerHTML = '';
+      if (this.inboundEmptyState) this.inboundEmptyState.style.display = 'flex';
+      return;
+    }
+
+    if (this.inboundEmptyState) this.inboundEmptyState.style.display = 'none';
+
+    this.inboundTableBody.innerHTML = conns.map((conn, idx) => {
+      const flag = conn.flag || '🌐';
+      const countryStr = conn.country || 'Unknown';
+      const regionStr = conn.region || '';
+      const cityStr = conn.city || '';
+      const locationFull = [cityStr, regionStr, countryStr].filter(Boolean).join(', ');
+
+      const remoteIp = conn.remote_ip || '0.0.0.0';
+      const remotePort = conn.remote_port ? `:${conn.remote_port}` : '';
+      const localPort = conn.local_port || 8080;
+      const service = conn.service || `Port ${localPort}`;
+      const proto = conn.proto || 'TCP';
+      const source = conn.source_type || 'socket';
+
+      let sourcePillClass = 'source-pill-socket';
+      let sourceLabel = 'SOCKET';
+      if (source === 'cloudflare') {
+        sourcePillClass = 'source-pill-cloudflare';
+        sourceLabel = 'CLOUDFLARE';
+      } else if (source === 'http') {
+        sourcePillClass = 'source-pill-http';
+        sourceLabel = 'HTTP';
+      } else if (source === 'threat_engine') {
+        sourcePillClass = 'source-pill-threat';
+        sourceLabel = 'THREAT ENGINE';
+      } else if (source === 'packet') {
+        sourcePillClass = 'source-pill-packet';
+        sourceLabel = 'SNIFFER';
+      }
+
+      let threatBadge = `<span style="display:inline-flex;align-items:center;gap:4px;color:#34d399;font-size:0.72rem;"><span style="width:6px;height:6px;border-radius:50%;background:#10b981;"></span>Benign</span>`;
+      if (conn.threat_severity) {
+        const sev = conn.threat_severity.toLowerCase();
+        const sevColor = sev === 'critical' ? '#ef4444' : sev === 'high' ? '#f97316' : '#eab308';
+        const sevBg = sev === 'critical' ? 'rgba(239, 68, 68, 0.2)' : sev === 'high' ? 'rgba(249, 115, 22, 0.2)' : 'rgba(234, 179, 8, 0.2)';
+        threatBadge = `
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:4px;background:${sevBg};color:${sevColor};font-size:0.7rem;font-weight:700;border:1px solid ${sevColor}55;" title="${conn.threat_signature || 'Threat Detected'}">
+            <span>🔴</span>
+            <span>${conn.threat_severity.toUpperCase()}</span>
+          </span>
+        `;
+      }
+
+      const hitCount = conn.hit_count || 1;
+      const bRecv = conn.bytes_received || 0;
+      const bSent = conn.bytes_sent || 0;
+      const volFormatted = this.formatBytes(bRecv + bSent);
+
+      const relSeen = this.formatRelativeTime(conn.last_seen);
+      const timeStr = conn.time_str || (conn.last_seen ? new Date(conn.last_seen * 1000).toLocaleTimeString() : '--');
+
+      const asnOrg = conn.org || conn.isp || conn.asn || '';
+
+      return `
+        <tr data-ip="${remoteIp}" data-port="${localPort}">
+          <td>
+            <div style="display:flex;align-items:center;gap:7px;">
+              <span style="font-size:1.15rem;line-height:1;">${flag}</span>
+              <div>
+                <div style="font-weight:700;color:#f8fafc;font-size:0.8rem;">${countryStr}</div>
+                <div style="font-size:0.7rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="${locationFull}">
+                  ${regionStr ? `<b>${regionStr}</b>` : ''}${regionStr && cityStr ? ', ' : ''}${cityStr || ''}
+                </div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div style="font-family:var(--font-mono, monospace);font-weight:600;color:var(--accent-cyan);font-size:0.8rem;">
+              ${remoteIp}<span style="color:#94a3b8;font-size:0.72rem;">${remotePort}</span>
+            </div>
+            ${asnOrg ? `<div style="font-size:0.68rem;color:#a78bfa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;" title="${asnOrg}">${asnOrg}</div>` : ''}
+          </td>
+          <td>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-family:var(--font-mono, monospace);font-weight:700;color:#38bdf8;font-size:0.82rem;">:${localPort}</span>
+              <span style="background:rgba(255,255,255,0.06);color:#cbd5e1;padding:1px 5px;border-radius:3px;font-size:0.7rem;font-weight:600;">${service}</span>
+            </div>
+            ${conn.process ? `<div style="font-size:0.68rem;color:#94a3b8;">${conn.process}</div>` : ''}
+          </td>
+          <td>
+            <div style="display:flex;align-items:center;gap:5px;">
+              <span style="font-family:var(--font-mono, monospace);font-size:0.72rem;color:#34d399;font-weight:700;">${proto}</span>
+              <span class="source-pill ${sourcePillClass}">${sourceLabel}</span>
+            </div>
+            ${conn.endpoint ? `<div style="font-size:0.68rem;color:var(--text-muted);font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;" title="${conn.endpoint}">${conn.endpoint}</div>` : ''}
+          </td>
+          <td>
+            ${threatBadge}
+          </td>
+          <td>
+            <div style="font-family:var(--font-mono, monospace);font-weight:700;color:#f1f5f9;font-size:0.78rem;">
+              ${hitCount.toLocaleString()} <span style="font-weight:400;color:var(--text-muted);font-size:0.7rem;">hits</span>
+            </div>
+            <div style="font-size:0.68rem;color:#fbbf24;font-family:var(--font-mono, monospace);">
+              ${volFormatted}
+            </div>
+          </td>
+          <td>
+            <div style="color:#f8fafc;font-weight:600;font-size:0.76rem;">${relSeen}</div>
+            <div style="font-size:0.68rem;color:var(--text-muted);font-family:monospace;">${timeStr}</div>
+          </td>
+          <td>
+            <div class="inbound-row-actions">
+              <button class="inbound-row-action-btn" data-action="focus-inbound" data-index="${idx}" title="Spotlight this client connection on Topology Canvas">
+                🎯 Focus
+              </button>
+              <button class="inbound-row-action-btn" data-action="inspect-inbound" data-index="${idx}" title="Inspect TCP/UDP Sockets for this client">
+                🔍 Sockets
+              </button>
+              <button class="inbound-row-action-btn" data-action="copy-ip" data-index="${idx}" title="Copy Client IP">
+                📋 IP
+              </button>
+              <button class="inbound-row-action-btn" data-action="block-ip" data-index="${idx}" style="color:#fca5a5;border-color:rgba(239,68,68,0.3);" title="Copy Linux iptables DROP command for this IP">
+                🛡️ Drop
+              </button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    // Attach click listeners to row actions
+    this.inboundTableBody.querySelectorAll('.inbound-row-action-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const action = btn.dataset.action;
+        const idx = parseInt(btn.dataset.index, 10);
+        const conn = conns[idx];
+        if (!conn) return;
+
+        if (action === 'focus-inbound') {
+          const clientIp = conn.remote_ip;
+          const localPort = conn.local_port || 8080;
+          this.chart.setFocusRelationship({
+            type: 'inbound',
+            title: `Inbound Client: ${clientIp} (${conn.country || 'Unknown'})`,
+            details: `${conn.flag || '🌐'} ${[conn.city, conn.region, conn.country].filter(Boolean).join(', ')} • Port :${localPort} (${conn.service || 'Service'}) • ${conn.hit_count || 1} hits`,
+            nodeKeys: new Set([clientIp]),
+            matchConn: (c) => {
+              return c.srcIP === clientIp || c.destIP === clientIp;
+            }
+          });
+          this.closeInboundDrawer();
+          this.showToast('Inbound Focus Active', `Spotlight on ingress client ${clientIp}. Press Esc or clear canvas banner to reset.`, 'info');
+        } else if (action === 'inspect-inbound') {
+          this.closeInboundDrawer();
+          this.openSocketInspector('ip', conn.remote_ip);
+        } else if (action === 'copy-ip') {
+          navigator.clipboard.writeText(conn.remote_ip).then(() => {
+            this.showToast('Copied to Clipboard', `Client IP ${conn.remote_ip} copied.`, 'success');
+          });
+        } else if (action === 'block-ip') {
+          const dropCmd = `sudo iptables -I INPUT -s ${conn.remote_ip} -j DROP`;
+          navigator.clipboard.writeText(dropCmd).then(() => {
+            this.showToast('Firewall Rule Copied', `Copied to clipboard: "${dropCmd}"`, 'warning');
+          });
+        }
+      });
+    });
+  }
+
+  renderInboundChips(topCountries, topStates) {
+    if (this.inboundCountryChips) {
+      if (topCountries.length === 0) {
+        this.inboundCountryChips.innerHTML = `<span style="font-size:0.72rem;color:var(--text-muted);">None</span>`;
+      } else {
+        this.inboundCountryChips.innerHTML = topCountries.slice(0, 8).map(c => {
+          const isAct = this.inboundFilterState.country === c.country;
+          return `
+            <div class="inbound-chip ${isAct ? 'active' : ''}" data-type="country" data-val="${c.country}" title="${c.country}: ${c.count} hits (${c.pct}%)">
+              <span>${c.flag || '🌐'}</span>
+              <span>${c.country}</span>
+              <span class="inbound-chip-badge">${c.count}</span>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    if (this.inboundStateChips) {
+      if (topStates.length === 0) {
+        this.inboundStateChips.innerHTML = `<span style="font-size:0.72rem;color:var(--text-muted);">None</span>`;
+      } else {
+        this.inboundStateChips.innerHTML = topStates.slice(0, 8).map(s => {
+          const isAct = this.inboundFilterState.region === s.state;
+          return `
+            <div class="inbound-chip ${isAct ? 'active' : ''}" data-type="state" data-val="${s.state}" title="${s.state}, ${s.country}: ${s.count} hits (${s.pct}%)">
+              <span>📍</span>
+              <span>${s.state}</span>
+              <span class="inbound-chip-badge">${s.count}</span>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    // Attach click events to chips
+    const handleChipClick = (e) => {
+      const chip = e.target.closest('.inbound-chip');
+      if (!chip) return;
+      const type = chip.dataset.type;
+      const val = chip.dataset.val;
+
+      if (type === 'country') {
+        this.inboundFilterState.country = (this.inboundFilterState.country === val) ? '' : val;
+        if (this.inboundCountrySelect) this.inboundCountrySelect.value = this.inboundFilterState.country;
+      } else if (type === 'state') {
+        this.inboundFilterState.region = (this.inboundFilterState.region === val) ? '' : val;
+        if (this.inboundRegionSelect) this.inboundRegionSelect.value = this.inboundFilterState.region;
+      }
+      this.fetchInboundReport();
+    };
+
+    this.inboundCountryChips?.querySelectorAll('.inbound-chip').forEach(c => c.addEventListener('click', handleChipClick));
+    this.inboundStateChips?.querySelectorAll('.inbound-chip').forEach(s => s.addEventListener('click', handleChipClick));
+  }
+
+  updateInboundDropdowns(report) {
+    if (this.inboundCountrySelect && report.availableCountries) {
+      const currVal = this.inboundFilterState.country;
+      let html = `<option value="">🌐 All Countries</option>`;
+      report.availableCountries.forEach(c => {
+        const sel = c.country === currVal ? 'selected' : '';
+        html += `<option value="${c.country}" ${sel}>${c.flag || '🌐'} ${c.country}</option>`;
+      });
+      this.inboundCountrySelect.innerHTML = html;
+      this.inboundCountrySelect.value = currVal;
+    }
+
+    if (this.inboundRegionSelect && report.availableStates) {
+      const currVal = this.inboundFilterState.region;
+      let html = `<option value="">📍 All States / Regions</option>`;
+      report.availableStates.forEach(s => {
+        const sel = s.region === currVal ? 'selected' : '';
+        html += `<option value="${s.region}" ${sel}>${s.region} (${s.countryCode || s.country})</option>`;
+      });
+      this.inboundRegionSelect.innerHTML = html;
+      this.inboundRegionSelect.value = currVal;
+    }
+
+    if (this.inboundPortSelect && report.availablePorts) {
+      const currVal = this.inboundFilterState.port;
+      let html = `<option value="">🔌 All Target Ports</option>`;
+      report.availablePorts.forEach(p => {
+        const sel = String(p.port) === String(currVal) ? 'selected' : '';
+        html += `<option value="${p.port}" ${sel}>:${p.port} (${p.service || p.proto})</option>`;
+      });
+      this.inboundPortSelect.innerHTML = html;
+      this.inboundPortSelect.value = currVal;
     }
   }
 
