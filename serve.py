@@ -90,6 +90,16 @@ def ensure_cloudflare_tunnel(port: int = DEFAULT_PORT) -> dict:
         }
 
 
+def check_cap_net_raw() -> bool:
+    """Verify that pure-Python raw packet capture has CAP_NET_RAW / CAP_NET_ADMIN."""
+    try:
+        s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
 # Global network collector instance
 collector = RealNetworkCollector()
 last_db_record_time = 0.0
@@ -665,6 +675,22 @@ def main():
                 print(f"    python3 serve.py 8081\n")
                 sys.exit(1)
 
+    # Verify CAP_NET_RAW capability for raw packet sniffing
+    has_cap = check_cap_net_raw()
+    if has_cap:
+        print("[serve.py] [CAP_NET_RAW] Verified: Linux AF_PACKET raw packet sniffer & promiscuous capture ALWAYS ACTIVE.")
+    else:
+        print("[serve.py] [CAP_NET_RAW] WARNING: Python binary lacks CAP_NET_RAW capability.")
+        print("[serve.py] Granting capability via setcap...")
+        try:
+            py_bin = subprocess.check_output(["readlink", "-f", sys.executable]).decode().strip()
+            subprocess.run(["sudo", "-n", "setcap", "cap_net_raw,cap_net_admin=eip", py_bin], check=True)
+            has_cap = check_cap_net_raw()
+            if has_cap:
+                print(f"[serve.py] [CAP_NET_RAW] Successfully granted capability to {py_bin}")
+        except Exception:
+            print("[serve.py] [CAP_NET_RAW] Run: sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))")
+
     # Ensure Cloudflare tunnel is running and bound to our port
     ensure_cloudflare_tunnel(port)
 
@@ -674,6 +700,7 @@ def main():
             print(f"[serve.py] Network Monitor NOC Dashboard Online")
             print(f"[serve.py] Local Origin:       http://localhost:{port}/index.html")
             print(f"[serve.py] Cloudflare Gateway: {DEFAULT_CLOUDFLARE_URL}")
+            print(f"[serve.py] Raw Packet Sniffer: {'ENABLED (CAP_NET_RAW / Promiscuous)' if has_cap else 'REQUIRES CAP_NET_RAW'}")
             print(f"[serve.py] Telemetry API:      http://localhost:{port}/api/network-telemetry")
             print(f"[serve.py] Gateway Info API:   http://localhost:{port}/api/gateway-info")
             print("=" * 72)

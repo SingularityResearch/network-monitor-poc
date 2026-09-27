@@ -1029,7 +1029,7 @@ class NetworkClusterApp {
 
       if (tag) {
         if (pcap.status === 'active') {
-          tag.textContent = pcap.promiscuous ? 'PROMISC ACTIVE' : 'ACTIVE';
+          tag.textContent = pcap.promiscuous ? 'PROMISC (CAP_NET_RAW)' : 'ACTIVE (CAP_NET_RAW)';
           tag.style.background = 'rgba(16, 185, 129, 0.15)';
           tag.style.color = '#34d399';
           tag.style.borderColor = 'rgba(16, 185, 129, 0.35)';

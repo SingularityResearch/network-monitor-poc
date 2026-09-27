@@ -189,16 +189,12 @@ The application includes an embedded, high-performance SQLite storage engine ([d
 
 The monitor includes a built-in, pure-Python raw packet capture engine ([`RawPacketSniffer`](file:///home/shivachrome/source/repos/network-monitor/telemetry.py#L65-L270) in [telemetry.py](file:///home/shivachrome/source/repos/network-monitor/telemetry.py)) using Linux `AF_PACKET` raw sockets.
 
-### 1. Enabling Packet Capture Permissions
-Raw socket packet capture on Linux requires `CAP_NET_RAW` capability. You can grant this to your Python binary without needing to run your entire development environment as root:
+### 1. Pure-Python Packet Capture (Always Active via CAP_NET_RAW)
+Raw socket packet capture on Linux uses `CAP_NET_RAW` and `CAP_NET_ADMIN` capabilities. The startup script [start.sh](file:///home/shivachrome/source/repos/network-monitor/start.sh) and [serve.py](file:///home/shivachrome/source/repos/network-monitor/serve.py) verify these capabilities on startup so that pure-Python raw packet capture and promiscuous sniffing are **always active** without needing to run as root:
 ```bash
+# Permitted capability applied to Python binary:
 sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
 ```
-Alternatively, launch the server directly with `sudo`:
-```bash
-sudo python3 serve.py 8080
-```
-*(If run unprivileged without capabilities, the server automatically degrades gracefully to kernel socket telemetry via `ss` and `/proc/net` without errors).*
 
 ### 2. Seeing Traffic Between Other Devices on a Home Network
 In modern switched Ethernet and WPA-encrypted Wi-Fi networks, network switches and access points do not broadcast unicast packets between device A and device B to device C's port. To capture and visualize traffic flowing between other devices on your home network:
@@ -466,10 +462,7 @@ python3 serve.py 8080
 - **Local Dashboard**: [http://localhost:8080](http://localhost:8080)
 - **Public Cloudflare Gateway**: [https://enlarge-disciplines-executive-watches.trycloudflare.com/](https://enlarge-disciplines-executive-watches.trycloudflare.com/)
 
-*(Optional: Run with `sudo` or grant `CAP_NET_RAW` to enable the pure-Python raw packet sniffer)*:
-```bash
-sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
-```
+- **Raw Packet Sniffer**: Always enabled via `CAP_NET_RAW` & `CAP_NET_ADMIN` (verified on startup, no `sudo` required).
 
 ### 2. Test Threat Detection & Signature Matching
 To test real-time signature matching, C2 reputation alerts, and canvas threat visualizations, launch the exploit traffic generator in a separate terminal:
